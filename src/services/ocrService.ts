@@ -18,7 +18,7 @@ export async function initOcrModel(): Promise<string> {
   }
 
   isInitializing = true;
-  console.log("Initializing OCR model (this might take some time to download on first run)...");
+  console.log("Initializing OCR model (useGPU: false for CPU execution stability)...");
   
   try {
     ocrModelId = await loadModel({
@@ -26,7 +26,8 @@ export async function initOcrModel(): Promise<string> {
       modelType: "onnx-ocr",
       modelConfig: {
         detectorModelSrc: "registry://s3/qvac_models_compiled/ocr/2026-02-12/rec_512/detector_craft.onnx",
-        langList: ["ru", "en"]
+        langList: ["ru", "en"],
+        useGPU: false // Force CPU execution to prevent CoreML/Metal native ONNX Runtime crashes on iOS
       }
     });
     console.log("OCR model loaded successfully! ID:", ocrModelId);
@@ -54,9 +55,6 @@ export async function recognizeImageText(imagePath: string): Promise<string> {
     });
     console.log("Read base64 data length:", base64Data.length);
     
-    // Create a fake Buffer object that calls toString() to return base64.
-    // QVAC's ocr() client function checks if image is not a string, and does:
-    // params.image.toString("base64")
     const fakeBuffer = {
       toString: () => base64Data
     } as any;
