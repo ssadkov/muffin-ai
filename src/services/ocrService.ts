@@ -1,5 +1,6 @@
 import { loadModel, ocr } from '@qvac/sdk';
 import { askLocalQVAC } from './qvacService';
+import * as FileSystem from 'expo-file-system/legacy';
 
 let ocrModelId: string | null = null;
 let isInitializing = false;
@@ -10,7 +11,6 @@ export async function initOcrModel(): Promise<string> {
   }
 
   if (isInitializing) {
-    // Wait until initialization completes
     while (isInitializing) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -42,14 +42,28 @@ export async function initOcrModel(): Promise<string> {
 export async function recognizeImageText(imagePath: string): Promise<string> {
   const modelId = await initOcrModel();
   
-  // QVAC expects raw filesystem paths without "file://" prefix
-  const rawPath = imagePath.replace(/^file:\/\//, '');
-  console.log("Running OCR on image path:", rawPath);
+  console.log("Reading image path for OCR:", imagePath);
 
   try {
+    const fileInfo = await FileSystem.getInfoAsync(imagePath);
+    console.log("Image File Info:", fileInfo);
+    
+    // Read the file as a base64 string on the React Native thread
+    const base64Data = await FileSystem.readAsStringAsync(imagePath, {
+      encoding: FileSystem.EncodingType.Base64
+    });
+    console.log("Read base64 data length:", base64Data.length);
+    
+    // Create a fake Buffer object that calls toString() to return base64.
+    // QVAC's ocr() client function checks if image is not a string, and does:
+    // params.image.toString("base64")
+    const fakeBuffer = {
+      toString: () => base64Data
+    } as any;
+
     const { blocks } = ocr({
       modelId,
-      image: rawPath
+      image: fakeBuffer
     });
 
     const detectedBlocks = await blocks;
@@ -88,7 +102,6 @@ ${ocrText}`;
     const response = await askLocalQVAC(prompt);
     console.log("LLM Parsing Response:", response.message);
 
-    // Clean up response to find the JSON block
     const jsonMatch = response.message.match(/\{[\s\S]*?\}/);
     if (jsonMatch) {
       const data = JSON.parse(jsonMatch[0]);
