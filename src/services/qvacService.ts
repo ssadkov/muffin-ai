@@ -17,10 +17,18 @@ export async function downloadModelIfNeeded(
     await FileSystem.makeDirectoryAsync(modelDir, { intermediates: true });
   }
 
+  const EXPECTED_MIN_SIZE = 2100000000; // ~2.1GB
   const fileInfo = await FileSystem.getInfoAsync(modelPath);
-  if (fileInfo.exists && fileInfo.size > 1000000000) {
-    if (onProgress) onProgress(100);
-    return modelPath;
+  console.log("Model file info on disk:", fileInfo);
+  
+  if (fileInfo.exists) {
+    if (fileInfo.size >= EXPECTED_MIN_SIZE) {
+      if (onProgress) onProgress(100);
+      return modelPath;
+    } else {
+      console.log(`Model file size is only ${fileInfo.size} bytes. Expected >= ${EXPECTED_MIN_SIZE}. Deleting corrupted file to re-download...`);
+      await FileSystem.deleteAsync(modelPath, { idempotent: true });
+    }
   }
 
   const downloadResumable = FileSystem.createDownloadResumable(
