@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, Keyboard } from 'react-native';
 import { askMuffinAi } from '../agent/muffinAiAgent';
 import { downloadModelIfNeeded, initLocalModel } from '../services/qvacService';
 
@@ -11,6 +11,7 @@ export default function ChatScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<number>(0);
   const [isModelReady, setIsModelReady] = useState(false);
+  const flatListRef = useRef<FlatList>(null);
 
   useEffect(() => {
     async function setupModel() {
@@ -34,6 +35,7 @@ export default function ChatScreen() {
     setMessages(prev => [...prev, userMsg]);
     setInputText('');
     setIsLoading(true);
+    Keyboard.dismiss();
 
     try {
       const response = await askMuffinAi(userMsg.text);
@@ -55,7 +57,7 @@ export default function ChatScreen() {
     <KeyboardAvoidingView 
       style={styles.container} 
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={90}
+      keyboardVerticalOffset={100}
     >
       {!isModelReady && (
         <View style={styles.downloadContainer}>
@@ -67,10 +69,12 @@ export default function ChatScreen() {
         </View>
       )}
       <FlatList
+        ref={flatListRef}
         data={messages}
         keyExtractor={item => item.id}
         renderItem={renderMessage}
-        contentContainerStyle={{ padding: 16, gap: 12 }}
+        contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: 8 }}
+        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
       />
       <View style={styles.inputContainer}>
         <TextInput
@@ -80,27 +84,31 @@ export default function ChatScreen() {
           value={inputText}
           onChangeText={setInputText}
           onSubmitEditing={sendMessage}
+          returnKeyType="send"
         />
-        <TouchableOpacity style={styles.sendButton} onPress={sendMessage} disabled={isLoading}>
-          {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.sendText}>Send</Text>}
+        <TouchableOpacity style={[styles.sendButton, (!inputText.trim() || isLoading) && styles.sendButtonDisabled]} onPress={sendMessage} disabled={isLoading || !inputText.trim()}>
+          {isLoading ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.sendIcon}>↑</Text>}
         </TouchableOpacity>
       </View>
+      <View style={styles.bottomSafeArea} />
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: { flex: 1, backgroundColor: '#121212' },
   messageBubble: { maxWidth: '80%', padding: 12, borderRadius: 16 },
   userBubble: { alignSelf: 'flex-end', backgroundColor: '#4CAF50', borderBottomRightRadius: 4 },
   aiBubble: { alignSelf: 'flex-start', backgroundColor: '#333', borderBottomLeftRadius: 4 },
-  messageText: { fontSize: 16 },
+  messageText: { fontSize: 16, lineHeight: 22 },
   userText: { color: '#FFF' },
   aiText: { color: '#FFF' },
-  inputContainer: { flexDirection: 'row', padding: 12, backgroundColor: '#1E1E1E', gap: 8 },
-  input: { flex: 1, backgroundColor: '#333', borderRadius: 20, paddingHorizontal: 16, color: '#FFF', minHeight: 40 },
-  sendButton: { backgroundColor: '#4CAF50', justifyContent: 'center', paddingHorizontal: 16, borderRadius: 20 },
-  sendText: { color: '#FFF', fontWeight: 'bold' },
+  inputContainer: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#1E1E1E', gap: 8, alignItems: 'center' },
+  input: { flex: 1, backgroundColor: '#333', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, color: '#FFF', fontSize: 16, minHeight: 40, maxHeight: 100 },
+  sendButton: { backgroundColor: '#4CAF50', width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+  sendButtonDisabled: { backgroundColor: '#555' },
+  sendIcon: { color: '#FFF', fontSize: 20, fontWeight: 'bold' },
   downloadContainer: { padding: 16, alignItems: 'center', backgroundColor: '#333', margin: 16, borderRadius: 12 },
-  downloadText: { color: '#4CAF50', marginTop: 8, textAlign: 'center' }
+  downloadText: { color: '#4CAF50', marginTop: 8, textAlign: 'center' },
+  bottomSafeArea: { height: Platform.OS === 'ios' ? 20 : 0, backgroundColor: '#1E1E1E' }
 });
