@@ -46,6 +46,79 @@ function estimateUsdValue(amount: number, currency: string): number {
   return amount; // default fallback
 }
 
+export function convertCurrency(amount: number, from: string, to: string): number {
+  const f = from.toUpperCase();
+  const t = to.toUpperCase();
+  if (f === t) return amount;
+  
+  // Convert from -> USD
+  let usdValue = amount;
+  if (f === 'EUR') usdValue = amount * 1.08;
+  else if (f === 'GBP') usdValue = amount * 1.27;
+  else if (f === 'RUB') usdValue = amount * 0.011;
+  else if (f === 'KZT') usdValue = amount * 0.0022;
+  
+  // Convert USD -> to
+  if (t === 'USD') return usdValue;
+  if (t === 'EUR') return usdValue / 1.08;
+  if (t === 'GBP') return usdValue / 1.27;
+  if (t === 'RUB') return usdValue / 0.011;
+  if (t === 'KZT') return usdValue / 0.0022;
+  
+  return amount; // fallback
+}
+
+export function executeBalanceUpdate(
+  accountId: string,
+  amount: number,
+  currency: string,
+  operation: 'add' | 'subtract' | 'set'
+) {
+  const now = new Date().toISOString();
+  
+  const account = getFirst('SELECT name, currency FROM accounts WHERE id = ?', [accountId]);
+  if (!account) {
+    throw new Error(`Account not found: ${accountId}`);
+  }
+  
+  const latestSnapshot = getFirst(
+    'SELECT amount, currency FROM balance_snapshots WHERE account_id = ? ORDER BY created_at DESC LIMIT 1',
+    [accountId]
+  );
+  
+  const currentAmount = latestSnapshot ? latestSnapshot.amount : 0;
+  const accountCurrency = account.currency || 'USD';
+  
+  let newAmount: number;
+  if (operation === 'set') {
+    newAmount = convertCurrency(amount, currency, accountCurrency);
+  } else {
+    const changeInAccountCurrency = convertCurrency(amount, currency, accountCurrency);
+    if (operation === 'add') {
+      newAmount = currentAmount + changeInAccountCurrency;
+    } else if (operation === 'subtract') {
+      newAmount = currentAmount - changeInAccountCurrency;
+    } else {
+      newAmount = currentAmount;
+    }
+  }
+  
+  const usdValue = estimateUsdValue(newAmount, accountCurrency);
+  const snapshotId = 'snap_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  
+  executeSql(
+    'INSERT INTO balance_snapshots (id, account_id, amount, currency, usd_value, source, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [snapshotId, accountId, newAmount, accountCurrency, usdValue, 'manual', 1.0, now]
+  );
+  
+  return {
+    accountName: account.name,
+    newAmount,
+    currency: accountCurrency,
+    newUsdValue: usdValue
+  };
+}
+
 export function updateAccountAddress(id: string, address: string) {
   executeSql(
     'UPDATE accounts SET address = ? WHERE id = ?',
