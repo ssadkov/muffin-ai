@@ -1,11 +1,10 @@
-import { qvacChat } from '../services/qvacService';
+import { askLocalQVAC } from '../services/qvacService';
 import {
   getLatestBalances,
-  getTotalLiquidAssets,
   getActiveGoals,
-  getActiveRules
 } from '../tools/databaseTools';
 import { checkMoneyRules } from '../tools/rulesTools';
+import { getBitcoinPrice } from '../tools/cryptoApiTools';
 
 export type AgentResponse = {
   message: string;
@@ -18,63 +17,49 @@ export type AgentAction = {
   metadata?: Record<string, unknown>;
 };
 
-export async function askMuffinAi(question: string): Promise<AgentResponse> {
-  const balances = getLatestBalances();
+function buildContextString(): string {
+  const accounts = getLatestBalances();
   const goals = getActiveGoals();
-  const rules = getActiveRules();
-  const totalAssets = getTotalLiquidAssets();
-  const ruleWarnings = checkMoneyRules();
+  const rules = checkMoneyRules();
 
-  // 1. Build Context
-  let context = 'LOCAL FINANCIAL MEMORY\\n\\n';
+  let context = 'LOCAL FINANCIAL MEMORY\n\n';
   
-  if (goals.length > 0) {
-    context += 'Goals:\\n';
-    goals.forEach(g => {
-      context += `- ${g.title}\\n`;
-    });
-    context += '\\n';
-  }
+  context += 'Goals:\n';
+  goals.forEach(g => context += `- ${g.title}: $${g.target_value}\n`);
 
-  if (balances.length > 0) {
-    context += 'Accounts:\\n';
-    balances.forEach(b => {
-      context += `- ${b.name}: $${b.usd_value}, source: ${b.source}, updated: ${b.created_at}\\n`;
-    });
-    context += '\\n';
-  }
+  context += '\nAccounts:\n';
+  let total = 0;
+  accounts.forEach(a => {
+    context += `- ${a.name}: $${a.usd_value}, source: ${a.source}, updated: ${a.created_at}\n`;
+    total += a.usd_value;
+  });
 
-  if (rules.length > 0) {
-    context += 'Rules:\\n';
-    rules.forEach(r => {
-      context += `- ${r.title}\\n`;
-    });
-    context += '\\n';
-  }
+  context += '\nRules Warnings:\n';
+  rules.forEach(r => context += `* ${r.message}\n`);
 
-  context += 'Computed:\\n';
-  context += `- Total liquid assets: $${totalAssets}\\n`;
-  if (goals.length > 0 && goals[0].target_value > 0) {
-    const progress = (totalAssets / goals[0].target_value) * 100;
-    context += `- Goal progress: ${progress.toFixed(2)}%\\n`;
-  }
+  context += `\nComputed:\n- Total liquid assets: $${total}\n`;
+
+  return context;
+}
+
+export async function askMuffinAi(question: string): Promise<{ message: string }> {
+  const context = buildContextString();
+  const instructions = `You are a private local AI on an iPhone. Keep answers concise.
+If the user asks for the Bitcoin price or BTC price, reply exactly with: [TOOL_CALL: BTC_PRICE]
+Otherwise, answer their question using the context provided.`;
+
+  const prompt = `${context}\n\nSYSTEM INSTRUCTIONS:\n${instructions}\n\nUSER QUESTION:\n${question}`;
   
-  if (ruleWarnings.length > 0) {
-    context += `- Rule warnings:\\n`;
-    ruleWarnings.forEach(w => {
-      context += `  * ${w.message}\\n`;
-    });
-  } else {
-    context += `- Rule warnings: None\\n`;
+  console.log("Sending prompt to Edge AI...");
+  let response = await askLocalQVAC(prompt);
+
+  // Tool parsing loop
+  if (response.message.includes('[TOOL_CALL: BTC_PRICE]')) {
+    console.log("Edge AI requested tool: BTC_PRICE");
+    const price = await getBitcoinPrice();
+    const followupPrompt = `${prompt}\n\nSYSTEM: Tool returned Bitcoin price = $${price}. Please answer the user now.`;
+    response = await askLocalQVAC(followupPrompt);
   }
 
-  // 2. Build final prompt
-  const fullPrompt = `${context}\\n\\nUSER QUESTION:\\n${question}`;
-
-  console.log('Sending prompt to QVAC:', fullPrompt);
-
-  // 3. Send to AI
-  const message = await qvacChat(fullPrompt);
-
-  return { message };
+  return response;
 }

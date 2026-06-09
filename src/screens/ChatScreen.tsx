@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { askMuffinAi } from '../agent/muffinAiAgent';
+import { downloadModelIfNeeded, initLocalModel } from '../services/qvacService';
 
 export default function ChatScreen() {
   const [messages, setMessages] = useState<{ id: string, text: string, isUser: boolean }[]>([
@@ -8,6 +9,23 @@ export default function ChatScreen() {
   ]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<number>(0);
+  const [isModelReady, setIsModelReady] = useState(false);
+
+  useEffect(() => {
+    async function setupModel() {
+      try {
+        const modelPath = await downloadModelIfNeeded((progress) => {
+          setDownloadProgress(progress);
+        });
+        await initLocalModel(modelPath);
+        setIsModelReady(true);
+      } catch (e) {
+        console.error("Model setup error:", e);
+      }
+    }
+    setupModel();
+  }, []);
 
   const sendMessage = async () => {
     if (!inputText.trim()) return;
@@ -39,6 +57,15 @@ export default function ChatScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={90}
     >
+      {!isModelReady && (
+        <View style={styles.downloadContainer}>
+          <ActivityIndicator size="large" color="#4CAF50" />
+          <Text style={styles.downloadText}>
+            Downloading AI Model ({downloadProgress.toFixed(1)}%)...
+            Please wait, this will take a while (approx 2.1GB).
+          </Text>
+        </View>
+      )}
       <FlatList
         data={messages}
         keyExtractor={item => item.id}
@@ -73,5 +100,7 @@ const styles = StyleSheet.create({
   inputContainer: { flexDirection: 'row', padding: 12, backgroundColor: '#1E1E1E', gap: 8 },
   input: { flex: 1, backgroundColor: '#333', borderRadius: 20, paddingHorizontal: 16, color: '#FFF', minHeight: 40 },
   sendButton: { backgroundColor: '#4CAF50', justifyContent: 'center', paddingHorizontal: 16, borderRadius: 20 },
-  sendText: { color: '#FFF', fontWeight: 'bold' }
+  sendText: { color: '#FFF', fontWeight: 'bold' },
+  downloadContainer: { padding: 16, alignItems: 'center', backgroundColor: '#333', margin: 16, borderRadius: 12 },
+  downloadText: { color: '#4CAF50', marginTop: 8, textAlign: 'center' }
 });
