@@ -1,10 +1,40 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, Keyboard } from 'react-native';
+import { 
+  View, 
+  Text, 
+  TextInput, 
+  TouchableOpacity, 
+  FlatList, 
+  StyleSheet, 
+  KeyboardAvoidingView, 
+  Platform, 
+  ActivityIndicator, 
+  Keyboard, 
+  Alert, 
+  Image 
+} from 'react-native';
 import { askMuffinAi } from '../agent/muffinAiAgent';
 import { downloadModelIfNeeded, initLocalModel } from '../services/qvacService';
+import { recognizeImageText, parseBalanceFromOcrText } from '../services/ocrService';
+import { upsertAccountBalance } from '../tools/databaseTools';
+import * as ImagePicker from 'expo-image-picker';
+
+interface Message {
+  id: string;
+  text: string;
+  isUser: boolean;
+  isPendingOcrConfirm?: boolean;
+  ocrData?: {
+    bank: string;
+    amount: number;
+    currency: string;
+    rawText: string;
+    screenshotPath: string;
+  };
+}
 
 export default function ChatScreen() {
-  const [messages, setMessages] = useState<{ id: string, text: string, isUser: boolean }[]>([
+  const [messages, setMessages] = useState<Message[]>([
     { id: '1', text: 'Hi! I am Muffin AI. Ask me about your accounts, goals or rules.', isUser: false }
   ]);
   const [inputText, setInputText] = useState('');
@@ -47,9 +77,190 @@ export default function ChatScreen() {
     }
   };
 
-  const renderMessage = ({ item }: { item: any }) => (
+  const handleAttachPress = () => {
+    Alert.alert(
+      "Add Bank Screenshot",
+      "Choose how to add your bank screenshot",
+      [
+        { text: "Take Photo / Camera", onPress: takePhoto },
+        { text: "Choose from Library", onPress: pickImage },
+        { text: "Cancel", style: "cancel" }
+      ]
+    );
+  };
+
+  const takePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert("Permission Required", "Camera permission is required to take a screenshot photo.");
+      return;
+    }
+    
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      quality: 1,
+    });
+
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      processScreenshot(result.assets[0].uri);
+    }
+  };
+
+  const pickImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert("Permission Required", "Photo library permission is required to select a screenshot.");
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 1,
+    });
+
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      processScreenshot(result.assets[0].uri);
+    }
+  };
+
+  const processScreenshot = async (uri: string) => {
+    setIsLoading(true);
+    
+    // Add a temporary OCR loading message in the chat
+    const ocrLoadingId = Date.now().toString();
+    setMessages(prev => [...prev, { 
+      id: ocrLoadingId, 
+      text: "🔍 Processing screenshot (OCR + Local AI parsing)...", 
+      isUser: false 
+    }]);
+
+    try {
+      // 1. Run OCR
+      const ocrText = await recognizeImageText(uri);
+      
+      // 2. Parse with LLM
+      const parsed = await parseBalanceFromOcrText(ocrText);
+      
+      // Remove the temporary loading message
+      setMessages(prev => prev.filter(m => m.id !== ocrLoadingId));
+
+      if (parsed) {
+        setMessages(prev => [...prev, {
+          id: Date.now().toString(),
+          text: `Found balance in screenshot:\n🏦 Bank: ${parsed.bank}\n💰 Balance: ${parsed.amount} ${parsed.currency}`,
+          isUser: false,
+          isPendingOcrConfirm: true,
+          ocrData: {
+            bank: parsed.bank,
+            amount: parsed.amount,
+            currency: parsed.currency,
+            rawText: ocrText,
+            screenshotPath: uri
+          }
+        }]);
+      } else {
+        setMessages(prev => [...prev, {
+          id: Date.now().toString(),
+          text: "Could not extract bank name or balance from the screenshot. Please try again with a clearer image.",
+          isUser: false
+        }]);
+      }
+    } catch (e) {
+      console.error(e);
+      // Remove loading message
+      setMessages(prev => prev.filter(m => m.id !== ocrLoadingId));
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        text: "Error processing the screenshot. Make sure the OCR model is fully loaded.",
+        isUser: false
+      }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const confirmOcrSave = (msgId: string, ocrData: any) => {
+    try {
+      const result = upsertAccountBalance(
+        ocrData.bank,
+        ocrData.amount,
+        ocrData.currency,
+        ocrData.rawText,
+        ocrData.screenshotPath
+      );
+      
+      setMessages(prev => prev.map(m => {
+        if (m.id === msgId) {
+          return {
+            ...m,
+            text: `✅ Saved balance to SQLite:\n🏦 Bank: ${ocrData.bank}\n💰 Balance: ${ocrData.amount} ${ocrData.currency}\nEquivalent: $${result.usdValue.toFixed(2)}`,
+            isPendingOcrConfirm: false,
+            ocrData: undefined
+          };
+        }
+        return m;
+      }));
+
+      // Trigger rules check and response update after saving
+      setTimeout(async () => {
+        setIsLoading(true);
+        try {
+          const response = await askMuffinAi(`I just updated my ${ocrData.bank} balance to ${ocrData.amount} ${ocrData.currency}.`);
+          setMessages(prev => [...prev, { id: Date.now().toString(), text: response.message, isUser: false }]);
+        } catch (e) {
+          console.error(e);
+        } finally {
+          setIsLoading(false);
+        }
+      }, 500);
+
+    } catch (e) {
+      console.error(e);
+      Alert.alert("Database Error", "Failed to save balance to SQLite database.");
+    }
+  };
+
+  const cancelOcrSave = (msgId: string) => {
+    setMessages(prev => prev.map(m => {
+      if (m.id === msgId) {
+        return {
+          ...m,
+          text: "❌ Cancelled saving balance.",
+          isPendingOcrConfirm: false,
+          ocrData: undefined
+        };
+      }
+      return m;
+    }));
+  };
+
+  const renderMessage = ({ item }: { item: Message }) => (
     <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
+      {item.ocrData?.screenshotPath && (
+        <Image 
+          source={{ uri: item.ocrData.screenshotPath }} 
+          style={styles.messageImage} 
+          resizeMode="cover"
+        />
+      )}
       <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
+      
+      {item.isPendingOcrConfirm && item.ocrData && (
+        <View style={styles.confirmButtonsContainer}>
+          <TouchableOpacity 
+            style={[styles.confirmButton, styles.yesButton]} 
+            onPress={() => confirmOcrSave(item.id, item.ocrData)}
+          >
+            <Text style={styles.confirmButtonText}>Save Balance</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={[styles.confirmButton, styles.noButton]} 
+            onPress={() => cancelOcrSave(item.id)}
+          >
+            <Text style={styles.confirmButtonText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 
@@ -77,6 +288,9 @@ export default function ChatScreen() {
         onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
       />
       <View style={styles.inputContainer}>
+        <TouchableOpacity style={styles.attachButton} onPress={handleAttachPress} disabled={!isModelReady || isLoading}>
+          <Text style={styles.attachIcon}>📎</Text>
+        </TouchableOpacity>
         <TextInput
           style={styles.input}
           placeholder="Ask Muffin AI..."
@@ -110,5 +324,46 @@ const styles = StyleSheet.create({
   sendIcon: { color: '#FFF', fontSize: 20, fontWeight: 'bold' },
   downloadContainer: { padding: 16, alignItems: 'center', backgroundColor: '#333', margin: 16, borderRadius: 12 },
   downloadText: { color: '#4CAF50', marginTop: 8, textAlign: 'center' },
-  bottomSafeArea: { height: Platform.OS === 'ios' ? 20 : 0, backgroundColor: '#1E1E1E' }
+  bottomSafeArea: { height: Platform.OS === 'ios' ? 20 : 0, backgroundColor: '#1E1E1E' },
+  attachButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#333',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  attachIcon: {
+    color: '#FFF',
+    fontSize: 20,
+  },
+  messageImage: {
+    width: 200,
+    height: 150,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  confirmButtonsContainer: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+  },
+  confirmButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    flex: 1,
+    alignItems: 'center',
+  },
+  yesButton: {
+    backgroundColor: '#4CAF50',
+  },
+  noButton: {
+    backgroundColor: '#D32F2F',
+  },
+  confirmButtonText: {
+    color: '#FFF',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
 });
