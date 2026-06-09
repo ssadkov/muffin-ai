@@ -53,6 +53,24 @@ export function updateAccountAddress(id: string, address: string) {
   );
 }
 
+export function createWalletAccount(name: string, source: string, address: string) {
+  const now = new Date().toISOString();
+  const id = 'acc_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  
+  executeSql(
+    'INSERT INTO accounts (id, name, type, source, currency, address, app_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, name, 'crypto_wallet', source, 'USD', address, null, now]
+  );
+  
+  const snapshotId = 'snap_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  executeSql(
+    'INSERT INTO balance_snapshots (id, account_id, amount, currency, usd_value, source, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [snapshotId, id, 0, 'USD', 0, source, 1.0, now]
+  );
+  
+  return id;
+}
+
 export function listAccounts() {
   return getAll('SELECT * FROM accounts');
 }
