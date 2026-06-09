@@ -46,6 +46,13 @@ function estimateUsdValue(amount: number, currency: string): number {
   return amount; // default fallback
 }
 
+export function updateAccountAddress(id: string, address: string) {
+  executeSql(
+    'UPDATE accounts SET address = ? WHERE id = ?',
+    [address, id]
+  );
+}
+
 export function listAccounts() {
   return getAll('SELECT * FROM accounts');
 }
@@ -53,7 +60,7 @@ export function listAccounts() {
 export function getLatestBalances() {
   // Simple approximation: join accounts and latest balance
   return getAll(`
-    SELECT a.id, a.name, a.source, b.amount, b.currency, b.usd_value, b.created_at
+    SELECT a.id, a.name, a.source, a.address, b.amount, b.currency, b.usd_value, b.created_at
     FROM accounts a
     LEFT JOIN balance_snapshots b ON a.id = b.account_id
     WHERE b.id IN (
