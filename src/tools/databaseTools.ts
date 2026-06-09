@@ -180,3 +180,7 @@ export function getActiveGoals() {
 export function getActiveRules() {
   return getAll('SELECT * FROM rules WHERE is_active = 1');
 }
+
+export function getAccountHistory(accountId: string) {
+  return getAll('SELECT * FROM balance_snapshots WHERE account_id = ? ORDER BY created_at DESC', [accountId]);
+}

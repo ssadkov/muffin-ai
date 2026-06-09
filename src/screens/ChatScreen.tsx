@@ -13,10 +13,11 @@ import {
   Alert, 
   Image 
 } from 'react-native';
-import { askMuffinAi } from '../agent/muffinAiAgent';
+import { askMuffinAi, continueMuffinAi } from '../agent/muffinAiAgent';
 import { downloadModelIfNeeded, initLocalModel } from '../services/qvacService';
 import { recognizeImageText, parseBalanceFromOcrText } from '../services/ocrService';
-import { upsertAccountBalance } from '../tools/databaseTools';
+import { upsertAccountBalance, executeBalanceUpdate, getLatestBalances } from '../tools/databaseTools';
+import { getBitcoinPrice } from '../tools/cryptoApiTools';
 import * as ImagePicker from 'expo-image-picker';
 
 interface Message {
@@ -31,6 +32,12 @@ interface Message {
     rawText: string;
     screenshotPath: string;
   };
+  // Tool call state
+  isToolCall?: boolean;
+  toolCallType?: 'BTC_PRICE' | 'UPDATE_BALANCE';
+  toolCallData?: any;
+  toolCallStatus?: 'pending' | 'running' | 'completed' | 'cancelled';
+  countdown?: number;
 }
 
 export default function ChatScreen() {
@@ -42,6 +49,9 @@ export default function ChatScreen() {
   const [downloadProgress, setDownloadProgress] = useState<number>(0);
   const [isModelReady, setIsModelReady] = useState(false);
   const flatListRef = useRef<FlatList>(null);
+  
+  // Track active countdown timers so they can be cancelled
+  const activeTimersRef = useRef<{ [msgId: string]: any }>({});
 
   useEffect(() => {
     async function setupModel() {
@@ -56,6 +66,11 @@ export default function ChatScreen() {
       }
     }
     setupModel();
+
+    return () => {
+      // Clear all active timers on unmount
+      Object.values(activeTimersRef.current).forEach(clearInterval);
+    };
   }, []);
 
   const sendMessage = async () => {
@@ -69,9 +84,163 @@ export default function ChatScreen() {
 
     try {
       const response = await askMuffinAi(userMsg.text);
+      await handleAiResponse(userMsg.text, response.message);
+    } catch (e) {
+      console.error(e);
+      setMessages(prev => [...prev, { id: Date.now().toString(), text: "Sorry, I had an issue connecting to the AI.", isUser: false }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleAiResponse = async (userQuestion: string, aiText: string) => {
+    if (aiText.includes('[TOOL_CALL: BTC_PRICE]')) {
+      const msgId = Date.now().toString();
+      const newMsg: Message = {
+        id: msgId,
+        text: "Fetching real-time Bitcoin price...",
+        isUser: false,
+        isToolCall: true,
+        toolCallType: 'BTC_PRICE',
+        toolCallStatus: 'pending',
+        countdown: 3
+      };
+      setMessages(prev => [...prev, newMsg]);
+      startToolCountdown(msgId, userQuestion, 'BTC_PRICE', null);
+    } 
+    else if (aiText.includes('[TOOL_CALL: UPDATE_BALANCE:')) {
+      const match = aiText.match(/\[TOOL_CALL: UPDATE_BALANCE: (\{.*?\})\]/);
+      if (match) {
+        try {
+          const toolData = JSON.parse(match[1]);
+          const msgId = Date.now().toString();
+          
+          const accounts = getLatestBalances();
+          const account = accounts.find(a => a.id === toolData.accountId);
+          const accountName = account ? account.name : toolData.accountId;
+
+          let opText = '';
+          if (toolData.type === 'add') opText = `Add ${toolData.amount} ${toolData.currency} to ${accountName}`;
+          else if (toolData.type === 'subtract') opText = `Spend ${toolData.amount} ${toolData.currency} from ${accountName}`;
+          else opText = `Set balance of ${accountName} to ${toolData.amount} ${toolData.currency}`;
+
+          const newMsg: Message = {
+            id: msgId,
+            text: opText,
+            isUser: false,
+            isToolCall: true,
+            toolCallType: 'UPDATE_BALANCE',
+            toolCallData: { ...toolData, accountName },
+            toolCallStatus: 'pending',
+            countdown: 3
+          };
+          setMessages(prev => [...prev, newMsg]);
+          startToolCountdown(msgId, userQuestion, 'UPDATE_BALANCE', toolData);
+        } catch (e) {
+          console.error("Failed to parse tool call JSON", e);
+          setMessages(prev => [...prev, { id: Date.now().toString(), text: aiText, isUser: false }]);
+        }
+      } else {
+        setMessages(prev => [...prev, { id: Date.now().toString(), text: aiText, isUser: false }]);
+      }
+    } 
+    else {
+      setMessages(prev => [...prev, { id: Date.now().toString(), text: aiText, isUser: false }]);
+    }
+  };
+
+  const startToolCountdown = (msgId: string, userQuestion: string, type: 'BTC_PRICE' | 'UPDATE_BALANCE', data: any) => {
+    let timeLeft = 3;
+    
+    const intervalId = setInterval(() => {
+      timeLeft -= 1;
+      
+      setMessages(prev => prev.map(m => {
+        if (m.id === msgId) {
+          return { ...m, countdown: timeLeft };
+        }
+        return m;
+      }));
+
+      if (timeLeft <= 0) {
+        clearInterval(intervalId);
+        delete activeTimersRef.current[msgId];
+        executeToolAction(msgId, userQuestion, type, data);
+      }
+    }, 1000);
+
+    activeTimersRef.current[msgId] = intervalId;
+  };
+
+  const cancelToolCall = async (msgId: string, userQuestion: string, type: string) => {
+    const timerId = activeTimersRef.current[msgId];
+    if (timerId) {
+      clearInterval(timerId);
+      delete activeTimersRef.current[msgId];
+    }
+
+    setMessages(prev => prev.map(m => {
+      if (m.id === msgId) {
+        return { ...m, toolCallStatus: 'cancelled', text: `Action cancelled: ${m.text}` };
+      }
+      return m;
+    }));
+
+    setIsLoading(true);
+    try {
+      const response = await continueMuffinAi(
+        userQuestion, 
+        `SYSTEM: The user cancelled the ${type} tool execution. Please confirm the cancellation to the user.`
+      );
       setMessages(prev => [...prev, { id: Date.now().toString(), text: response.message, isUser: false }]);
     } catch (e) {
-      setMessages(prev => [...prev, { id: Date.now().toString(), text: "Sorry, I had an issue connecting to the AI.", isUser: false }]);
+      console.error(e);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const executeToolAction = async (msgId: string, userQuestion: string, type: 'BTC_PRICE' | 'UPDATE_BALANCE', data: any) => {
+    setMessages(prev => prev.map(m => {
+      if (m.id === msgId) {
+        return { ...m, toolCallStatus: 'running' };
+      }
+      return m;
+    }));
+
+    setIsLoading(true);
+    try {
+      let systemMessage = '';
+      if (type === 'BTC_PRICE') {
+        const price = await getBitcoinPrice();
+        systemMessage = `SYSTEM: Tool returned Bitcoin price = $${price}. Please answer the user now.`;
+      } 
+      else if (type === 'UPDATE_BALANCE') {
+        const result = executeBalanceUpdate(data.accountId, data.amount, data.currency, data.type);
+        systemMessage = `SYSTEM: Tool successfully executed ${data.type} of ${data.amount} ${data.currency} for account '${result.accountName}'. New account balance is ${result.newAmount} ${result.currency} (USD equivalent: $${result.newUsdValue.toFixed(2)}). Please tell the user that the balance has been updated and confirm the new details.`;
+      }
+
+      setMessages(prev => prev.map(m => {
+        if (m.id === msgId) {
+          return { ...m, toolCallStatus: 'completed' };
+        }
+        return m;
+      }));
+
+      const response = await continueMuffinAi(userQuestion, systemMessage);
+      setMessages(prev => [...prev, { id: Date.now().toString(), text: response.message, isUser: false }]);
+    } catch (e: any) {
+      console.error(e);
+      setMessages(prev => prev.map(m => {
+        if (m.id === msgId) {
+          return { ...m, toolCallStatus: 'completed', text: `Error: ${m.text}` };
+        }
+        return m;
+      }));
+      
+      const errorMsg = `SYSTEM: Failed to execute tool call. Error: ${e?.message || e}. Please let the user know.`;
+      const response = await continueMuffinAi(userQuestion, errorMsg);
+      setMessages(prev => [...prev, { id: Date.now().toString(), text: response.message, isUser: false }]);
     } finally {
       setIsLoading(false);
     }
@@ -126,7 +295,6 @@ export default function ChatScreen() {
   const processScreenshot = async (uri: string) => {
     setIsLoading(true);
     
-    // Add a temporary OCR loading message in the chat
     const ocrLoadingId = Date.now().toString();
     setMessages(prev => [...prev, { 
       id: ocrLoadingId, 
@@ -135,13 +303,9 @@ export default function ChatScreen() {
     }]);
 
     try {
-      // 1. Run OCR
       const ocrText = await recognizeImageText(uri);
-      
-      // 2. Parse with LLM
       const parsed = await parseBalanceFromOcrText(ocrText);
       
-      // Remove the temporary loading message
       setMessages(prev => prev.filter(m => m.id !== ocrLoadingId));
 
       if (parsed) {
@@ -167,7 +331,6 @@ export default function ChatScreen() {
       }
     } catch (e) {
       console.error(e);
-      // Remove loading message
       setMessages(prev => prev.filter(m => m.id !== ocrLoadingId));
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
@@ -193,7 +356,7 @@ export default function ChatScreen() {
         if (m.id === msgId) {
           return {
             ...m,
-            text: `✅ Saved balance to SQLite:\n🏦 Bank: ${ocrData.bank}\n💰 Balance: ${ocrData.amount} ${ocrData.currency}\nEquivalent: $${result.usdValue.toFixed(2)}`,
+            text: `Saved balance to SQLite:\n🏦 Bank: ${ocrData.bank}\n💰 Balance: ${ocrData.amount} ${ocrData.currency}\nEquivalent: $${result.usdValue.toFixed(2)}`,
             isPendingOcrConfirm: false,
             ocrData: undefined
           };
@@ -201,12 +364,11 @@ export default function ChatScreen() {
         return m;
       }));
 
-      // Trigger rules check and response update after saving
       setTimeout(async () => {
         setIsLoading(true);
         try {
           const response = await askMuffinAi(`I just updated my ${ocrData.bank} balance to ${ocrData.amount} ${ocrData.currency}.`);
-          setMessages(prev => [...prev, { id: Date.now().toString(), text: response.message, isUser: false }]);
+          await handleAiResponse(`I just updated my ${ocrData.bank} balance to ${ocrData.amount} ${ocrData.currency}.`, response.message);
         } catch (e) {
           console.error(e);
         } finally {
@@ -234,35 +396,77 @@ export default function ChatScreen() {
     }));
   };
 
-  const renderMessage = ({ item }: { item: Message }) => (
-    <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
-      {item.ocrData?.screenshotPath && (
-        <Image 
-          source={{ uri: item.ocrData.screenshotPath }} 
-          style={styles.messageImage} 
-          resizeMode="cover"
-        />
-      )}
-      <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
-      
-      {item.isPendingOcrConfirm && item.ocrData && (
-        <View style={styles.confirmButtonsContainer}>
-          <TouchableOpacity 
-            style={[styles.confirmButton, styles.yesButton]} 
-            onPress={() => confirmOcrSave(item.id, item.ocrData)}
-          >
-            <Text style={styles.confirmButtonText}>Save Balance</Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.confirmButton, styles.noButton]} 
-            onPress={() => cancelOcrSave(item.id)}
-          >
-            <Text style={styles.confirmButtonText}>Cancel</Text>
-          </TouchableOpacity>
+  const renderMessage = ({ item }: { item: Message }) => {
+    if (item.isToolCall) {
+      return (
+        <View style={styles.toolCard}>
+          <Text style={styles.toolTitle}>
+            {item.toolCallType === 'BTC_PRICE' ? '🌐 Crypto Query' : '⚙️ Balance Action'}
+          </Text>
+          <Text style={styles.toolText}>{item.text}</Text>
+          
+          {item.toolCallStatus === 'pending' && (
+            <View style={styles.toolProgressContainer}>
+              <Text style={styles.toolProgressText}>
+                Executing in {item.countdown}s...
+              </Text>
+              <TouchableOpacity 
+                style={styles.toolCancelButton} 
+                onPress={() => cancelToolCall(item.id, messages[messages.length - 2]?.text || '', item.toolCallType || '')}
+              >
+                <Text style={styles.toolCancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {item.toolCallStatus === 'running' && (
+            <View style={styles.toolProgressContainer}>
+              <ActivityIndicator size="small" color="#4CAF50" />
+              <Text style={[styles.toolProgressText, { marginLeft: 8 }]}>Running action...</Text>
+            </View>
+          )}
+
+          {item.toolCallStatus === 'completed' && (
+            <Text style={styles.toolStatusCompleted}>✓ Completed</Text>
+          )}
+
+          {item.toolCallStatus === 'cancelled' && (
+            <Text style={styles.toolStatusCancelled}>✗ Cancelled</Text>
+          )}
         </View>
-      )}
-    </View>
-  );
+      );
+    }
+
+    return (
+      <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
+        {item.ocrData?.screenshotPath && (
+          <Image 
+            source={{ uri: item.ocrData.screenshotPath }} 
+            style={styles.messageImage} 
+            resizeMode="cover"
+          />
+        )}
+        <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
+        
+        {item.isPendingOcrConfirm && item.ocrData && (
+          <View style={styles.confirmButtonsContainer}>
+            <TouchableOpacity 
+              style={[styles.confirmButton, styles.yesButton]} 
+              onPress={() => confirmOcrSave(item.id, item.ocrData)}
+            >
+              <Text style={styles.confirmButtonText}>Save Balance</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.confirmButton, styles.noButton]} 
+              onPress={() => cancelOcrSave(item.id)}
+            >
+              <Text style={styles.confirmButtonText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+    );
+  };
 
   return (
     <KeyboardAvoidingView 
@@ -365,5 +569,65 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontWeight: 'bold',
     fontSize: 14,
+  },
+
+  // Tool Call card styles
+  toolCard: {
+    backgroundColor: '#1E1E1E',
+    borderWidth: 1.5,
+    borderColor: '#4CAF50',
+    borderRadius: 12,
+    padding: 14,
+    marginVertical: 4,
+    width: 250,
+    alignSelf: 'flex-start',
+  },
+  toolTitle: {
+    color: '#4CAF50',
+    fontSize: 12,
+    fontWeight: 'bold',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginBottom: 6,
+  },
+  toolText: {
+    color: '#FFF',
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 10,
+  },
+  toolProgressContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  toolProgressText: {
+    color: '#AAA',
+    fontSize: 12,
+    fontStyle: 'italic',
+  },
+  toolCancelButton: {
+    backgroundColor: '#D32F2F',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+  },
+  toolCancelText: {
+    color: '#FFF',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  toolStatusCompleted: {
+    color: '#888',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  toolStatusCancelled: {
+    color: '#D32F2F',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 4,
   },
 });

@@ -13,7 +13,7 @@ import {
   TouchableWithoutFeedback,
   Keyboard
 } from 'react-native';
-import { getLatestBalances, updateAccountAddress, createWalletAccount } from '../tools/databaseTools';
+import { getLatestBalances, updateAccountAddress, createWalletAccount, getAccountHistory } from '../tools/databaseTools';
 
 export default function AccountsScreen() {
   const [accounts, setAccounts] = useState<any[]>([]);
@@ -27,6 +27,11 @@ export default function AccountsScreen() {
   const [newWalletNetwork, setNewWalletNetwork] = useState('solana_public_wallet');
   const [newWalletAddress, setNewWalletAddress] = useState('');
 
+  // History state
+  const [isHistoryVisible, setIsHistoryVisible] = useState(false);
+  const [historyAccount, setHistoryAccount] = useState<any>(null);
+  const [historyData, setHistoryData] = useState<any[]>([]);
+
   useEffect(() => {
     setAccounts(getLatestBalances());
   }, []);
@@ -35,6 +40,13 @@ export default function AccountsScreen() {
     setSelectedAccount(account);
     setAddressInput(account.address || '');
     setIsEditModalVisible(true);
+  };
+
+  const openHistoryModal = (account: any) => {
+    setHistoryAccount(account);
+    const history = getAccountHistory(account.id);
+    setHistoryData(history);
+    setIsHistoryVisible(true);
   };
 
   const saveAddress = () => {
@@ -87,7 +99,11 @@ export default function AccountsScreen() {
     const isCryptoWallet = item.source.endsWith('_wallet') || item.type === 'crypto_wallet';
 
     return (
-      <View style={styles.card}>
+      <TouchableOpacity 
+        style={styles.card} 
+        onPress={() => openHistoryModal(item)}
+        activeOpacity={0.7}
+      >
         <View style={styles.cardHeader}>
           <Text style={styles.name}>{item.name}</Text>
           <Text style={styles.value}>${item.usd_value}</Text>
@@ -114,9 +130,23 @@ export default function AccountsScreen() {
           <Text style={styles.source}>{item.source}</Text>
           <Text style={styles.date}>{item.created_at ? new Date(item.created_at).toLocaleDateString() : 'N/A'}</Text>
         </View>
-      </View>
+        <Text style={styles.tapTip}>Tap to view history</Text>
+      </TouchableOpacity>
     );
   };
+
+  const renderHistoryItem = ({ item }: { item: any }) => (
+    <View style={styles.historyRow}>
+      <View>
+        <Text style={styles.historySource}>Source: {item.source}</Text>
+        <Text style={styles.historyDate}>{new Date(item.created_at).toLocaleString()}</Text>
+      </View>
+      <View style={{ alignItems: 'flex-end' }}>
+        <Text style={styles.historyAmount}>{item.amount} {item.currency}</Text>
+        <Text style={styles.historyUsd}>${item.usd_value?.toFixed(2)}</Text>
+      </View>
+    </View>
+  );
 
   return (
     <View style={styles.container}>
@@ -256,6 +286,37 @@ export default function AccountsScreen() {
           </View>
         </TouchableWithoutFeedback>
       </Modal>
+
+      {/* Account History Modal */}
+      <Modal
+        visible={isHistoryVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setIsHistoryVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '80%' }]}>
+            <Text style={styles.modalTitle}>{historyAccount?.name} Balance History</Text>
+            
+            <FlatList
+              data={historyData}
+              keyExtractor={(item, index) => item.id || index.toString()}
+              renderItem={renderHistoryItem}
+              contentContainerStyle={{ gap: 12, paddingVertical: 10 }}
+              ListEmptyComponent={
+                <Text style={{ color: '#888', textAlign: 'center', marginVertical: 20 }}>No balance history found.</Text>
+              }
+            />
+            
+            <TouchableOpacity 
+              style={[styles.modalButton, styles.cancelButton, { marginTop: 16 }]} 
+              onPress={() => setIsHistoryVisible(false)}
+            >
+              <Text style={styles.buttonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -283,6 +344,13 @@ const styles = StyleSheet.create({
   cardFooter: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 },
   source: { color: '#888', fontSize: 12 },
   date: { color: '#888', fontSize: 12 },
+  tapTip: {
+    color: '#555',
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 8,
+    fontStyle: 'italic'
+  },
   
   addressContainer: {
     backgroundColor: '#151515',
@@ -406,5 +474,36 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontWeight: 'bold',
     fontSize: 15
+  },
+
+  // History styles
+  historyRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#2A2A2A',
+    alignItems: 'center'
+  },
+  historySource: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '500',
+    textTransform: 'capitalize'
+  },
+  historyDate: {
+    color: '#888',
+    fontSize: 12,
+    marginTop: 4
+  },
+  historyAmount: {
+    color: '#4CAF50',
+    fontSize: 14,
+    fontWeight: 'bold'
+  },
+  historyUsd: {
+    color: '#AAA',
+    fontSize: 12,
+    marginTop: 4
   }
 });

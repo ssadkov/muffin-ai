@@ -2,10 +2,8 @@ import { askLocalQVAC } from '../services/qvacService';
 import {
   getLatestBalances,
   getActiveGoals,
-  executeBalanceUpdate,
 } from '../tools/databaseTools';
 import { checkMoneyRules } from '../tools/rulesTools';
-import { getBitcoinPrice } from '../tools/cryptoApiTools';
 
 export type AgentResponse = {
   message: string;
@@ -59,32 +57,15 @@ Otherwise, answer their question using the context provided.`;
   const prompt = `${context}\n\nSYSTEM INSTRUCTIONS:\n${instructions}\n\nUSER QUESTION:\n${question}`;
   
   console.log("Sending prompt to Edge AI...");
-  let response = await askLocalQVAC(prompt);
+  return await askLocalQVAC(prompt);
+}
 
-  // Tool parsing loop
-  if (response.message.includes('[TOOL_CALL: BTC_PRICE]')) {
-    console.log("Edge AI requested tool: BTC_PRICE");
-    const price = await getBitcoinPrice();
-    const followupPrompt = `${prompt}\n\nSYSTEM: Tool returned Bitcoin price = $${price}. Please answer the user now.`;
-    response = await askLocalQVAC(followupPrompt);
-  } else if (response.message.includes('[TOOL_CALL: UPDATE_BALANCE:')) {
-    console.log("Edge AI requested tool: UPDATE_BALANCE");
-    const match = response.message.match(/\[TOOL_CALL: UPDATE_BALANCE: (\{.*?\})\]/);
-    if (match) {
-      try {
-        const { accountId, amount, currency, type } = JSON.parse(match[1]);
-        const result = executeBalanceUpdate(accountId, amount, currency, type);
-        console.log("Balance update executed successfully:", result);
-        
-        const followupPrompt = `${prompt}\n\nSYSTEM: Tool successfully executed ${type} of ${amount} ${currency} for account '${result.accountName}' (ID: ${accountId}). New account balance is ${result.newAmount} ${result.currency} (USD equivalent: $${result.newUsdValue.toFixed(2)}). Please tell the user that the balance has been updated and confirm the new details.`;
-        response = await askLocalQVAC(followupPrompt);
-      } catch (e: any) {
-        console.error("Error executing balance update tool:", e);
-        const errorPrompt = `${prompt}\n\nSYSTEM: Failed to update balance. Error: ${e?.message || e}. Please inform the user.`;
-        response = await askLocalQVAC(errorPrompt);
-      }
-    }
-  }
-
-  return response;
+export async function continueMuffinAi(originalQuestion: string, systemMessage: string): Promise<{ message: string }> {
+  const context = buildContextString();
+  const instructions = `You are a private local AI on an iPhone. Keep answers concise.`;
+  
+  const prompt = `${context}\n\nSYSTEM INSTRUCTIONS:\n${instructions}\n\nUSER QUESTION:\n${originalQuestion}\n\n${systemMessage}`;
+  
+  console.log("Continuing prompt to Edge AI...");
+  return await askLocalQVAC(prompt);
 }
