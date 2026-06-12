@@ -4,6 +4,7 @@ import {
   Text, 
   StyleSheet, 
   FlatList, 
+  SectionList,
   TouchableOpacity, 
   Modal, 
   TextInput, 
@@ -229,17 +230,38 @@ export default function AccountsScreen() {
   const renderItem = ({ item }: { item: any }) => {
     const isCryptoWallet = item.source.endsWith('_wallet') || item.type === 'crypto_wallet';
     const isExchange = item.source.endsWith('_api') || item.type === 'exchange';
+    const ownerType = item.owner_type || 'personal';
+    const ownershipPercent = Number(item.ownership_percent || 100);
 
     return (
       <TouchableOpacity 
-        style={styles.card} 
+        style={[styles.card, ownerType === 'company' && styles.companyCard]} 
         onPress={() => openHistoryModal(item)}
         activeOpacity={0.7}
       >
         <View style={styles.cardHeader}>
-          <Text style={styles.name}>{item.name}</Text>
-          <Text style={styles.value}>${item.usd_value}</Text>
+          <View style={{ flex: 1, paddingRight: 8 }}>
+            <Text style={styles.name}>{item.name}</Text>
+            <View style={styles.metaRow}>
+              <Text style={[styles.ownerBadge, ownerType === 'company' && styles.companyBadge]}>
+                {ownerType === 'company' ? 'Company' : 'Personal'}
+              </Text>
+              {ownerType === 'company' && (
+                <Text style={styles.shareBadge}>{ownershipPercent}% share</Text>
+              )}
+            </View>
+          </View>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={styles.value}>${item.usd_value}</Text>
+            {ownerType === 'company' && (
+              <Text style={styles.ownedValue}>owned ≈ ${item.owned_usd_value}</Text>
+            )}
+          </View>
         </View>
+
+        {item.model_note ? (
+          <Text style={styles.modelNote}>{item.model_note}</Text>
+        ) : null}
         
         {isCryptoWallet && (
           <View style={styles.addressContainer}>
@@ -310,6 +332,32 @@ export default function AccountsScreen() {
     </View>
   );
 
+  const personalAccounts = accounts.filter((item) => (item.owner_type || 'personal') !== 'company');
+  const companyAccounts = accounts.filter((item) => item.owner_type === 'company');
+  const sumUsd = (items: any[], field = 'usd_value') =>
+    items.reduce((sum, item) => sum + Number(item[field] || 0), 0);
+  const personalUsd = sumUsd(personalAccounts);
+  const companyUsd = sumUsd(companyAccounts);
+  const companyOwnedUsd = sumUsd(companyAccounts, 'owned_usd_value');
+  const accountSections = [
+    { title: lang === 'ru' ? 'Личные счета' : 'Personal accounts', total: personalUsd, data: personalAccounts },
+    { title: lang === 'ru' ? 'Счета компании' : 'Company accounts', total: companyUsd, ownedTotal: companyOwnedUsd, data: companyAccounts },
+  ].filter((section) => section.data.length > 0);
+
+  const renderSectionHeader = ({ section }: { section: any }) => (
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionTitle}>{section.title}</Text>
+      <View style={{ alignItems: 'flex-end' }}>
+        <Text style={styles.sectionTotal}>${section.total.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Text>
+        {section.ownedTotal !== undefined && (
+          <Text style={styles.sectionOwned}>
+            {lang === 'ru' ? 'твоя доля' : 'owned'} ${section.ownedTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+          </Text>
+        )}
+      </View>
+    </View>
+  );
+
   return (
     <View style={styles.container}>
       {/* Header Add Buttons */}
@@ -340,11 +388,27 @@ export default function AccountsScreen() {
         )}
       </View>
 
-      <FlatList
-        data={accounts}
+      <View style={styles.summaryCard}>
+        <View>
+          <Text style={styles.summaryLabel}>{lang === 'ru' ? 'Личные' : 'Personal'}</Text>
+          <Text style={styles.summaryValue}>${personalUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Text>
+        </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          <Text style={styles.summaryLabel}>{lang === 'ru' ? 'Компания' : 'Company'}</Text>
+          <Text style={styles.summaryValue}>${companyUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Text>
+          <Text style={styles.summarySub}>
+            {lang === 'ru' ? 'доля' : 'share'} ${companyOwnedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+          </Text>
+        </View>
+      </View>
+
+      <SectionList
+        sections={accountSections}
         keyExtractor={item => item.id}
         renderItem={renderItem}
+        renderSectionHeader={renderSectionHeader}
         contentContainerStyle={{ gap: 12, paddingBottom: 20 }}
+        stickySectionHeadersEnabled={false}
       />
 
       {/* Edit Address Modal */}
@@ -751,6 +815,99 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontWeight: 'bold',
     fontSize: 15
+  },
+  summaryCard: {
+    backgroundColor: '#181818',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#2E2E2E',
+    padding: 14,
+    marginBottom: 14,
+    flexDirection: 'row',
+    justifyContent: 'space-between'
+  },
+  summaryLabel: {
+    color: '#888',
+    fontSize: 12,
+    marginBottom: 4
+  },
+  summaryValue: {
+    color: '#FFF',
+    fontSize: 18,
+    fontWeight: 'bold'
+  },
+  summarySub: {
+    color: '#9CCC65',
+    fontSize: 12,
+    marginTop: 2
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 6,
+    paddingBottom: 2
+  },
+  sectionTitle: {
+    color: '#AAA',
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4
+  },
+  sectionTotal: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '700'
+  },
+  sectionOwned: {
+    color: '#888',
+    fontSize: 11,
+    marginTop: 2
+  },
+  companyCard: {
+    borderColor: '#3F51B5'
+  },
+  metaRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 6,
+    flexWrap: 'wrap'
+  },
+  ownerBadge: {
+    color: '#BDBDBD',
+    backgroundColor: '#2A2A2A',
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  companyBadge: {
+    color: '#C5CAE9',
+    backgroundColor: '#28335F'
+  },
+  shareBadge: {
+    color: '#9CCC65',
+    backgroundColor: '#20301E',
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  ownedValue: {
+    color: '#9CCC65',
+    fontSize: 11,
+    marginTop: 3
+  },
+  modelNote: {
+    color: '#AAA',
+    fontSize: 12,
+    lineHeight: 17,
+    marginBottom: 10
   },
 
   // History styles

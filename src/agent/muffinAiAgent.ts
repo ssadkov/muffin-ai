@@ -5,6 +5,9 @@ import {
   getRatesMap,
   getSetting,
   normalizeCurrency,
+  getBalanceGroups,
+  getPaymentCoverageSummary,
+  getUpcomingPaymentObligations,
 } from '../tools/databaseTools';
 import { checkMoneyRules } from '../tools/rulesTools';
 import {
@@ -41,8 +44,27 @@ function buildContextString(): string {
   let total = 0;
   accounts.forEach(a => {
     // Include account ID and currency to help the LLM match them correctly
-    context += `- ${a.name} (ID: ${a.id}, owner: ${a.owner_type || 'personal'}): ${a.amount} ${a.currency || 'USD'} (USD: $${a.usd_value})\n`;
+    context += `- ${a.name} (ID: ${a.id}, owner: ${a.owner_type || 'personal'}, share: ${a.ownership_percent || 100}%): ${a.amount} ${a.currency || 'USD'} (USD: $${a.usd_value}, owned USD: $${a.owned_usd_value || a.usd_value}). Note: ${a.model_note || 'No note'}\n`;
     total += a.usd_value;
+  });
+
+  const balanceGroups = getBalanceGroups();
+  context += '\nAccount Groups:\n';
+  context += `- Personal total: $${balanceGroups.personalUsd}\n`;
+  context += `- Company total: $${balanceGroups.companyUsd}\n`;
+  context += `- Company owned share: $${balanceGroups.companyOwnedUsd}\n`;
+  context += `- Personal + owned company share: $${balanceGroups.totalOwnedUsd}\n`;
+
+  const paymentSummary = getPaymentCoverageSummary(31);
+  context += '\nUpcoming Payments (31 days):\n';
+  paymentSummary.payments.forEach((payment: any) => {
+    context += `- ${payment.title} (${payment.owner_type}): ${payment.amount} ${payment.currency}, due day ${payment.due_day}, account ${payment.account_name || payment.account_id || 'not set'}. Note: ${payment.model_note || 'No note'}\n`;
+  });
+  paymentSummary.deficits.forEach((deficit) => {
+    const suggestion = deficit.suggested_from_currency
+      ? ` Convert about ${deficit.suggested_from_amount} ${deficit.suggested_from_currency} to ${deficit.currency}.`
+      : '';
+    context += `- Payment deficit for ${deficit.owner_type} ${deficit.currency}: missing ${deficit.missing} ${deficit.currency}.${suggestion}\n`;
   });
 
   context += '\nExchange Rates (against USD):\n';
@@ -149,6 +171,48 @@ function isGoalRemainingQuestion(text: string): boolean {
   );
 }
 
+function isCompanyScopeQuestion(text: string): boolean {
+  return (
+    text.includes('company') ||
+    text.includes('business') ||
+    text.includes('corporate') ||
+    text.includes('компан') ||
+    text.includes('бизнес') ||
+    text.includes('юр') ||
+    text.includes('тоо') ||
+    text.includes('ооо')
+  );
+}
+
+function isPersonalScopeQuestion(text: string): boolean {
+  return (
+    text.includes('personal') ||
+    text.includes('private') ||
+    text.includes('личн') ||
+    text.includes('физ')
+  );
+}
+
+function isPaymentQuestion(text: string): boolean {
+  return (
+    text.includes('платеж') ||
+    text.includes('платёж') ||
+    text.includes('оплат') ||
+    text.includes('ипотек') ||
+    text.includes('кредит') ||
+    text.includes('долг') ||
+    text.includes('хватит') ||
+    text.includes('нужно перев') ||
+    text.includes('конверт') ||
+    text.includes('payment') ||
+    text.includes('bill') ||
+    text.includes('mortgage') ||
+    text.includes('loan') ||
+    text.includes('due') ||
+    text.includes('cover')
+  );
+}
+
 function getLargestAccount(accounts: ReturnType<typeof getLatestBalances>): any | null {
   if (accounts.length === 0) return null;
   return accounts.reduce((best, account) => {
@@ -225,8 +289,88 @@ function buildGoalRemainingAnswer(accounts: ReturnType<typeof getLatestBalances>
     : `About $${remainingText} remains. Current total is $${totalText} of $${target.toLocaleString()}.`;
 }
 
+function buildGroupedBalanceAnswer(isRussian: boolean): string {
+  const groups = getBalanceGroups();
+  if (isRussian) {
+    return [
+      `Личные счета: $${groups.personalUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
+      `Счета компании: $${groups.companyUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
+      `Твоя доля в company-счетах: $${groups.companyOwnedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
+      `Личные деньги + твоя доля компании: $${groups.totalOwnedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
+    ].join('\n');
+  }
+
+  return [
+    `Personal accounts: $${groups.personalUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
+    `Company accounts: $${groups.companyUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
+    `Your company share: $${groups.companyOwnedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
+    `Personal + owned company share: $${groups.totalOwnedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
+  ].join('\n');
+}
+
+function buildPaymentCoverageAnswer(question: string, isRussian: boolean): string {
+  const text = normalizeQuestion(question);
+  const ownerType = isCompanyScopeQuestion(text)
+    ? 'company'
+    : isPersonalScopeQuestion(text)
+      ? 'personal'
+      : undefined;
+  const summary = getPaymentCoverageSummary(31, ownerType as any);
+  const scopeLabel = ownerType === 'company'
+    ? (isRussian ? 'компании' : 'company')
+    : ownerType === 'personal'
+      ? (isRussian ? 'личным счетам' : 'personal')
+      : (isRussian ? 'всем счетам' : 'all accounts');
+
+  if (summary.payments.length === 0) {
+    return isRussian
+      ? `На ближайшие ${summary.daysAhead} дней платежей по ${scopeLabel} нет.`
+      : `No upcoming payments for ${scopeLabel} in the next ${summary.daysAhead} days.`;
+  }
+
+  const paymentLines = summary.payments.map((payment: any) => {
+    const due = new Date(payment.due_date_iso).toLocaleDateString();
+    const account = payment.account_name ? `, ${isRussian ? 'счет' : 'account'}: ${payment.account_name}` : '';
+    return `- ${payment.title}: ${formatMoney(payment.amount, payment.currency)}, ${isRussian ? 'до' : 'due'} ${due}${account}`;
+  });
+
+  if (summary.isCovered) {
+    return isRussian
+      ? `На ближайшие ${summary.daysAhead} дней по ${scopeLabel} платежи покрыты.\n${paymentLines.join('\n')}\n\nИтого платежей: ~$${summary.totalDueUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`
+      : `Upcoming payments for ${scopeLabel} are covered for the next ${summary.daysAhead} days.\n${paymentLines.join('\n')}\n\nTotal due: ~$${summary.totalDueUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`;
+  }
+
+  const deficitLines = summary.deficits.map((deficit: any) => {
+    const conversion = deficit.suggested_from_currency
+      ? isRussian
+        ? ` Можно перевести примерно ${formatMoney(deficit.suggested_from_amount, deficit.suggested_from_currency)} в ${deficit.currency}.`
+        : ` Convert about ${formatMoney(deficit.suggested_from_amount, deficit.suggested_from_currency)} to ${deficit.currency}.`
+      : isRussian
+        ? ' Свободной суммы в другой валюте не хватает для полного покрытия.'
+        : ' There is not enough surplus in another currency to fully cover it.';
+    return isRussian
+      ? `- ${deficit.owner_type}: не хватает ${formatMoney(deficit.missing, deficit.currency)}.${conversion}`
+      : `- ${deficit.owner_type}: missing ${formatMoney(deficit.missing, deficit.currency)}.${conversion}`;
+  });
+
+  return isRussian
+    ? `На ближайшие ${summary.daysAhead} дней есть риск по платежам ${scopeLabel}.\n${paymentLines.join('\n')}\n\nДефицит:\n${deficitLines.join('\n')}`
+    : `There is payment coverage risk for ${scopeLabel} in the next ${summary.daysAhead} days.\n${paymentLines.join('\n')}\n\nDeficits:\n${deficitLines.join('\n')}`;
+}
+
 function answerSimpleReadQuestion(question: string, accounts: ReturnType<typeof getLatestBalances>, isRussian: boolean): string | null {
   const text = normalizeQuestion(question);
+
+  if (isPaymentQuestion(text)) {
+    return buildPaymentCoverageAnswer(question, isRussian);
+  }
+
+  if (
+    (isCompanyScopeQuestion(text) || isPersonalScopeQuestion(text)) &&
+    (isOverviewQuestion(text) || text.includes('счет') || text.includes('account') || text.includes('money') || text.includes('деньг'))
+  ) {
+    return buildGroupedBalanceAnswer(isRussian);
+  }
 
   if (isGoalRemainingQuestion(text)) {
     return buildGoalRemainingAnswer(accounts, isRussian);
@@ -275,7 +419,7 @@ const COMMAND_JSON_SCHEMA = {
 
 function getAccountListString(accounts: ReturnType<typeof getLatestBalances>): string {
   return accounts
-    .map((account) => `- ${account.name}: id=${account.id}, owner=${account.owner_type || 'personal'}, currency=${account.currency || 'USD'}`)
+    .map((account) => `- ${account.name}: id=${account.id}, owner=${account.owner_type || 'personal'}, share=${account.ownership_percent || 100}%, currency=${account.currency || 'USD'}, note=${account.model_note || ''}`)
     .join('\n');
 }
 

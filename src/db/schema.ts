@@ -7,6 +7,8 @@ export function initializeDatabase() {
       name TEXT NOT NULL,
       type TEXT NOT NULL,
       owner_type TEXT DEFAULT 'personal',
+      model_note TEXT,
+      ownership_percent REAL DEFAULT 100,
       source TEXT NOT NULL,
       currency TEXT,
       address TEXT,
@@ -25,6 +27,22 @@ export function initializeDatabase() {
       confidence REAL,
       raw_text TEXT,
       screenshot_path TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(account_id) REFERENCES accounts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS payment_obligations (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      owner_type TEXT DEFAULT 'personal',
+      amount REAL NOT NULL,
+      currency TEXT NOT NULL,
+      due_day INTEGER NOT NULL,
+      frequency TEXT DEFAULT 'monthly',
+      account_id TEXT,
+      remind_days_before INTEGER DEFAULT 3,
+      model_note TEXT,
+      is_active INTEGER DEFAULT 1,
       created_at TEXT NOT NULL,
       FOREIGN KEY(account_id) REFERENCES accounts(id)
     );

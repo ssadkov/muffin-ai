@@ -22,12 +22,15 @@ import {
   updateGoal, 
   syncAllExchanges, 
   getSetting, 
-  setSetting 
+  setSetting,
+  getBalanceGroups,
+  getPaymentCoverageSummary
 } from '../tools/databaseTools';
 import { checkMoneyRules } from '../tools/rulesTools';
 import { fetchAndUpdateRates, getLastRatesUpdate } from '../services/exchangeRateService';
 import { exportAuditLogs, clearAuditLogs } from '../services/inferenceLogService';
 import { syncPublicWallets } from '../services/walletSyncService';
+import { schedulePaymentReminders } from '../services/paymentReminderService';
 import { t, Language } from '../localization/localization';
 
 export default function HomeScreen() {
@@ -38,6 +41,8 @@ export default function HomeScreen() {
   const [goal, setGoal] = useState<any>(null);
   const [warnings, setWarnings] = useState<any[]>([]);
   const [lang, setLang] = useState<Language>('ru');
+  const [balanceGroups, setBalanceGroups] = useState<any>(null);
+  const [paymentSummary, setPaymentSummary] = useState<any>(null);
 
   // Goal modal states
   const [isGoalModalVisible, setIsGoalModalVisible] = useState(false);
@@ -65,6 +70,7 @@ export default function HomeScreen() {
       ])
         .then(() => {
           refreshData();
+          schedulePaymentReminders();
         })
         .catch(err => console.error("Auto-sync error on load:", err));
     }
@@ -72,6 +78,8 @@ export default function HomeScreen() {
 
   const refreshData = () => {
     setAssets(getTotalLiquidAssets());
+    setBalanceGroups(getBalanceGroups());
+    setPaymentSummary(getPaymentCoverageSummary(31));
     const goals = getActiveGoals();
     if (goals.length > 0) {
       setGoal(goals[0]);
@@ -217,6 +225,54 @@ export default function HomeScreen() {
             </Text>
           )}
         </TouchableOpacity>
+
+        {balanceGroups && (
+          <View style={styles.splitGrid}>
+            <TouchableOpacity
+              style={styles.splitCard}
+              onPress={() => navigation.navigate('Accounts')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.splitLabel}>{lang === 'ru' ? 'Личные счета' : 'Personal'}</Text>
+              <Text style={styles.splitValue}>${balanceGroups.personalUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.splitCard, { borderColor: '#3F51B5' }]}
+              onPress={() => navigation.navigate('Accounts')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.splitLabel}>{lang === 'ru' ? 'Компания' : 'Company'}</Text>
+              <Text style={styles.splitValue}>${balanceGroups.companyUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Text>
+              <Text style={styles.splitSub}>
+                {lang === 'ru' ? 'твоя доля' : 'owned'} ${balanceGroups.companyOwnedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {paymentSummary && (
+          <View style={[styles.card, paymentSummary.isCovered ? styles.paymentOkCard : styles.paymentRiskCard]}>
+            <View style={styles.cardHeaderRow}>
+              <Text style={styles.cardLabel}>{lang === 'ru' ? 'Payment Radar' : 'Payment Radar'}</Text>
+              <Text style={paymentSummary.isCovered ? styles.paymentOkText : styles.paymentRiskText}>
+                {paymentSummary.isCovered ? (lang === 'ru' ? 'Покрыто' : 'Covered') : (lang === 'ru' ? 'Риск' : 'Risk')}
+              </Text>
+            </View>
+            <Text style={styles.paymentTitle}>
+              {paymentSummary.payments.length} {lang === 'ru' ? 'платежей за 31 день' : 'payments in 31 days'}
+            </Text>
+            <Text style={styles.paymentSub}>
+              {lang === 'ru' ? 'Итого' : 'Total'} ≈ ${paymentSummary.totalDueUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </Text>
+            {paymentSummary.deficits.slice(0, 2).map((deficit: any, index: number) => (
+              <Text key={`${deficit.owner_type}-${deficit.currency}-${index}`} style={styles.paymentDeficit}>
+                {lang === 'ru'
+                  ? `${deficit.owner_type}: не хватает ${deficit.missing} ${deficit.currency}`
+                  : `${deficit.owner_type}: missing ${deficit.missing} ${deficit.currency}`}
+              </Text>
+            ))}
+          </View>
+        )}
 
         {goal ? (
           <View style={styles.card}>
@@ -389,6 +445,25 @@ const styles = StyleSheet.create({
   cardLabel: { color: '#AAA', fontSize: 14 },
   cardValue: { color: '#FFF', fontSize: 28, fontWeight: 'bold' },
   cardHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  splitGrid: { flexDirection: 'row', gap: 12, marginBottom: 16 },
+  splitCard: {
+    flex: 1,
+    backgroundColor: '#1E1E1E',
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#2E2E2E'
+  },
+  splitLabel: { color: '#888', fontSize: 12, marginBottom: 6 },
+  splitValue: { color: '#FFF', fontSize: 19, fontWeight: 'bold' },
+  splitSub: { color: '#9CCC65', fontSize: 11, marginTop: 4 },
+  paymentOkCard: { borderColor: '#2E7D32' },
+  paymentRiskCard: { borderColor: '#D32F2F', backgroundColor: '#2A1A1A' },
+  paymentOkText: { color: '#66BB6A', fontSize: 12, fontWeight: '700' },
+  paymentRiskText: { color: '#EF5350', fontSize: 12, fontWeight: '700' },
+  paymentTitle: { color: '#FFF', fontSize: 18, fontWeight: '700', marginBottom: 4 },
+  paymentSub: { color: '#AAA', fontSize: 13 },
+  paymentDeficit: { color: '#FFAB91', fontSize: 12, marginTop: 6 },
   miniEditButton: { backgroundColor: '#333', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6 },
   miniEditButtonText: { color: '#FFF', fontSize: 12, fontWeight: '500' },
   goalDetail: { fontSize: 14, color: '#888', fontWeight: 'normal' },
