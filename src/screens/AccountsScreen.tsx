@@ -11,21 +11,55 @@ import {
   KeyboardAvoidingView,
   Platform,
   TouchableWithoutFeedback,
-  Keyboard
+  Keyboard,
+  ActivityIndicator,
+  Switch
 } from 'react-native';
-import { getLatestBalances, updateAccountAddress, createWalletAccount, getAccountHistory } from '../tools/databaseTools';
+import { 
+  getLatestBalances, 
+  updateAccountAddress, 
+  createWalletAccount, 
+  getAccountHistory,
+  addExchangeConnection,
+  syncExchangeBalance,
+  deleteExchangeConnection,
+  syncAllExchanges,
+  getSetting
+} from '../tools/databaseTools';
+import { testBybitConnection } from '../services/bybitService';
+import { syncPublicWallets } from '../services/walletSyncService';
+import { useIsFocused } from '@react-navigation/native';
+import { t, Language } from '../localization/localization';
 
 export default function AccountsScreen() {
+  const isFocused = useIsFocused();
+  const [lang, setLang] = useState<Language>('ru');
   const [accounts, setAccounts] = useState<any[]>([]);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [selectedAccount, setSelectedAccount] = useState<any>(null);
   const [addressInput, setAddressInput] = useState('');
+
+  useEffect(() => {
+    if (isFocused) {
+      setLang(getSetting('language', 'ru') as Language);
+    }
+  }, [isFocused]);
 
   // Add Wallet state
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [newWalletName, setNewWalletName] = useState('');
   const [newWalletNetwork, setNewWalletNetwork] = useState('solana_public_wallet');
   const [newWalletAddress, setNewWalletAddress] = useState('');
+
+  // Connect Exchange state
+  const [isConnectModalVisible, setIsConnectModalVisible] = useState(false);
+  const [exchangeLabel, setExchangeLabel] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [apiSecret, setApiSecret] = useState('');
+  const [isTestnet, setIsTestnet] = useState(false);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
+  const [isSyncingAll, setIsSyncingAll] = useState(false);
 
   // History state
   const [isHistoryVisible, setIsHistoryVisible] = useState(false);
@@ -65,7 +99,7 @@ export default function AccountsScreen() {
       setAddressInput('');
     } catch (e) {
       console.error(e);
-      Alert.alert("Error", "Failed to save address to database.");
+      Alert.alert(t('error', lang), t('saveAddressError', lang));
     }
   };
 
@@ -74,7 +108,7 @@ export default function AccountsScreen() {
     const trimmedAddress = newWalletAddress.trim();
 
     if (!trimmedName) {
-      Alert.alert("Validation Error", "Please enter a wallet name.");
+      Alert.alert(t('validationGoalTitle', lang), lang === 'ru' ? 'Пожалуйста, введите имя кошелька.' : 'Please enter a wallet name.');
       return;
     }
 
@@ -91,12 +125,110 @@ export default function AccountsScreen() {
       setIsAddModalVisible(false);
     } catch (e) {
       console.error(e);
-      Alert.alert("Error", "Failed to create new wallet account.");
+      Alert.alert(t('error', lang), t('createWalletError', lang));
     }
   };
 
+  const handleConnectExchange = async () => {
+    const trimmedLabel = exchangeLabel.trim();
+    const trimmedKey = apiKey.trim();
+    const trimmedSecret = apiSecret.trim();
+
+    if (!trimmedLabel || !trimmedKey || !trimmedSecret) {
+      Alert.alert(t('validationGoalTitle', lang), t('validationExchangeDesc', lang));
+      return;
+    }
+
+    setIsTestingConnection(true);
+    try {
+      // 1. Verify credentials by making a test API call
+      const isValid = await testBybitConnection(trimmedKey, trimmedSecret, isTestnet);
+      if (!isValid) {
+        throw new Error("Invalid credentials or response from Bybit.");
+      }
+
+      // 2. Add connection and account to SQLite & SecureStore
+      const accountId = await addExchangeConnection(trimmedLabel, 'Bybit', trimmedKey, trimmedSecret, isTestnet);
+
+      // 3. Perform initial sync
+      await syncExchangeBalance(accountId);
+
+      // 4. Reset form & refresh list
+      setExchangeLabel('');
+      setApiKey('');
+      setApiSecret('');
+      setIsTestnet(false);
+      setIsConnectModalVisible(false);
+      setAccounts(getLatestBalances());
+      
+      Alert.alert(t('success', lang), t('bybitSuccess', lang));
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert(t('exchangeConnError', lang), t('exchangeConnErrorDesc', lang));
+    } finally {
+      setIsTestingConnection(false);
+    }
+  };
+
+  const handleSyncSingleExchange = async (accountId: string) => {
+    setSyncingAccountId(accountId);
+    try {
+      await syncExchangeBalance(accountId);
+      setAccounts(getLatestBalances());
+      Alert.alert(t('success', lang), t('syncSingleSuccess', lang));
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert(t('syncError', lang), t('syncErrorDesc', lang));
+    } finally {
+      setSyncingAccountId(null);
+    }
+  };
+
+  const handleDeleteExchange = (accountId: string, accountName: string) => {
+    Alert.alert(
+      t('deleteConnectionTitle', lang),
+      t('deleteConnectionDesc', lang, { name: accountName }),
+      [
+        { text: t('cancel', lang), style: "cancel" },
+        { 
+          text: t('clear', lang), 
+          style: "destructive", 
+          onPress: async () => {
+            try {
+              await deleteExchangeConnection(accountId);
+              setAccounts(getLatestBalances());
+              Alert.alert(t('deletedTitle', lang), t('deletedDesc', lang));
+            } catch (e: any) {
+              console.error(e);
+              Alert.alert(t('error', lang), t('deleteError', lang));
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleSyncAll = async () => {
+    setIsSyncingAll(true);
+    try {
+      await Promise.all([
+        syncPublicWallets(),
+        syncAllExchanges()
+      ]);
+      setAccounts(getLatestBalances());
+      Alert.alert(t('success', lang), t('syncSuccess', lang));
+    } catch (e) {
+      console.error(e);
+      Alert.alert(t('error', lang), lang === 'ru' ? 'Не удалось синхронизировать все балансы.' : 'Failed to update all balances.');
+    } finally {
+      setIsSyncingAll(false);
+    }
+  };
+
+
   const renderItem = ({ item }: { item: any }) => {
     const isCryptoWallet = item.source.endsWith('_wallet') || item.type === 'crypto_wallet';
+    const isExchange = item.source.endsWith('_api') || item.type === 'exchange';
 
     return (
       <TouchableOpacity 
@@ -111,17 +243,47 @@ export default function AccountsScreen() {
         
         {isCryptoWallet && (
           <View style={styles.addressContainer}>
-            <Text style={styles.addressLabel}>Wallet Address:</Text>
+            <Text style={styles.addressLabel}>{lang === 'ru' ? 'Адрес кошелька:' : 'Wallet Address:'}</Text>
             <View style={styles.addressRow}>
               <Text style={styles.addressText} numberOfLines={1} ellipsizeMode="middle">
-                {item.address || 'Not Configured'}
+                {item.address || (lang === 'ru' ? 'Не настроен' : 'Not Configured')}
               </Text>
               <TouchableOpacity 
                 style={styles.editButton} 
                 onPress={() => openEditModal(item)}
               >
-                <Text style={styles.editButtonText}>✏️ Edit</Text>
+                <Text style={styles.editButtonText}>{lang === 'ru' ? '✏️ Изменить' : '✏️ Edit'}</Text>
               </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {isExchange && (
+          <View style={styles.addressContainer}>
+            <Text style={styles.addressLabel}>{lang === 'ru' ? 'API интеграция:' : 'API Integration:'}</Text>
+            <View style={styles.addressRow}>
+              <Text style={styles.addressText} numberOfLines={1}>
+                {item.source === 'bybit_api' ? t('bybitApiLabel', lang) : t('exchangeApi', lang)}
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 6 }}>
+                <TouchableOpacity 
+                  style={[styles.editButton, { backgroundColor: '#4CAF50' }]} 
+                  onPress={() => handleSyncSingleExchange(item.id)}
+                  disabled={syncingAccountId === item.id}
+                >
+                  {syncingAccountId === item.id ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.editButtonText}>{lang === 'ru' ? '🔄 Синхр.' : '🔄 Sync'}</Text>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={[styles.editButton, { backgroundColor: '#d32f2f' }]} 
+                  onPress={() => handleDeleteExchange(item.id, item.name)}
+                >
+                  <Text style={styles.editButtonText}>{t('deleteButton', lang)}</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         )}
@@ -130,7 +292,7 @@ export default function AccountsScreen() {
           <Text style={styles.source}>{item.source}</Text>
           <Text style={styles.date}>{item.created_at ? new Date(item.created_at).toLocaleDateString() : 'N/A'}</Text>
         </View>
-        <Text style={styles.tapTip}>Tap to view history</Text>
+        <Text style={styles.tapTip}>{t('tapToViewHistory', lang)}</Text>
       </TouchableOpacity>
     );
   };
@@ -138,7 +300,7 @@ export default function AccountsScreen() {
   const renderHistoryItem = ({ item }: { item: any }) => (
     <View style={styles.historyRow}>
       <View>
-        <Text style={styles.historySource}>Source: {item.source}</Text>
+        <Text style={styles.historySource}>{t('sourceLabel', lang)}: {item.source}</Text>
         <Text style={styles.historyDate}>{new Date(item.created_at).toLocaleString()}</Text>
       </View>
       <View style={{ alignItems: 'flex-end' }}>
@@ -150,13 +312,33 @@ export default function AccountsScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Header Add Button */}
-      <TouchableOpacity 
-        style={styles.addButton} 
-        onPress={() => setIsAddModalVisible(true)}
-      >
-        <Text style={styles.addButtonText}>➕ Add Crypto Wallet</Text>
-      </TouchableOpacity>
+      {/* Header Add Buttons */}
+      <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
+        <TouchableOpacity 
+          style={[styles.addButton, { flex: 1, marginBottom: 0 }]} 
+          onPress={() => setIsAddModalVisible(true)}
+        >
+          <Text style={styles.addButtonText}>{t('addWallet', lang)}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.addButton, { flex: 1, marginBottom: 0, borderColor: '#2196F3' }]} 
+          onPress={() => setIsConnectModalVisible(true)}
+        >
+          <Text style={[styles.addButtonText, { color: '#2196F3' }]}>{t('connectBybit', lang)}</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Sync All Button */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <Text style={{ color: '#888', fontSize: 13 }}>{t('connectedAccounts', lang)}</Text>
+        {isSyncingAll ? (
+          <ActivityIndicator size="small" color="#4CAF50" />
+        ) : (
+          <TouchableOpacity onPress={handleSyncAll}>
+            <Text style={{ color: '#4CAF50', fontSize: 13, fontWeight: 'bold' }}>{t('syncAll', lang)}</Text>
+          </TouchableOpacity>
+        )}
+      </View>
 
       <FlatList
         data={accounts}
@@ -179,12 +361,12 @@ export default function AccountsScreen() {
               style={styles.modalContent}
             >
               <Text style={styles.modalTitle}>
-                Edit {selectedAccount?.name} Address
+                {t('editAddress', lang)}: {selectedAccount?.name}
               </Text>
               
               <TextInput
                 style={styles.modalInput}
-                placeholder="Enter wallet public key / address"
+                placeholder={t('publicAddressPlaceholder', lang)}
                 placeholderTextColor="#666"
                 value={addressInput}
                 onChangeText={setAddressInput}
@@ -197,13 +379,13 @@ export default function AccountsScreen() {
                   style={[styles.modalButton, styles.cancelButton]} 
                   onPress={() => setIsEditModalVisible(false)}
                 >
-                  <Text style={styles.buttonText}>Cancel</Text>
+                  <Text style={styles.buttonText}>{t('cancel', lang)}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity 
                   style={[styles.modalButton, styles.saveButton]} 
                   onPress={saveAddress}
                 >
-                  <Text style={styles.buttonText}>Save</Text>
+                  <Text style={styles.buttonText}>{t('save', lang)}</Text>
                 </TouchableOpacity>
               </View>
             </KeyboardAvoidingView>
@@ -224,18 +406,18 @@ export default function AccountsScreen() {
               behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
               style={styles.modalContent}
             >
-              <Text style={styles.modalTitle}>Add New Wallet</Text>
+              <Text style={styles.modalTitle}>{lang === 'ru' ? 'Добавить кошелек' : 'Add New Wallet'}</Text>
               
-              <Text style={styles.inputLabel}>Wallet Name</Text>
+              <Text style={styles.inputLabel}>{t('newWalletNameLabel', lang)}</Text>
               <TextInput
                 style={styles.modalInput}
-                placeholder="e.g. My Ledger SOL, Ethereum mainnet"
+                placeholder={t('newWalletNamePlaceholder', lang)}
                 placeholderTextColor="#666"
                 value={newWalletName}
                 onChangeText={setNewWalletName}
               />
 
-              <Text style={styles.inputLabel}>Network</Text>
+              <Text style={styles.inputLabel}>{t('walletNetworkLabel', lang)}</Text>
               <View style={styles.networkSelector}>
                 <TouchableOpacity 
                   style={[styles.networkButton, newWalletNetwork === 'solana_public_wallet' && styles.networkButtonActive]}
@@ -257,10 +439,10 @@ export default function AccountsScreen() {
                 </TouchableOpacity>
               </View>
 
-              <Text style={styles.inputLabel}>Wallet Address</Text>
+              <Text style={styles.inputLabel}>{t('walletAddressLabel', lang)}</Text>
               <TextInput
                 style={[styles.modalInput, { fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' }]}
-                placeholder="Enter wallet address / public key"
+                placeholder={t('walletAddressPlaceholder', lang)}
                 placeholderTextColor="#666"
                 value={newWalletAddress}
                 onChangeText={setNewWalletAddress}
@@ -273,13 +455,95 @@ export default function AccountsScreen() {
                   style={[styles.modalButton, styles.cancelButton]} 
                   onPress={() => setIsAddModalVisible(false)}
                 >
-                  <Text style={styles.buttonText}>Cancel</Text>
+                  <Text style={styles.buttonText}>{t('cancel', lang)}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity 
                   style={[styles.modalButton, styles.saveButton]} 
                   onPress={handleCreateWallet}
                 >
-                  <Text style={styles.buttonText}>Add Wallet</Text>
+                  <Text style={styles.buttonText}>{t('addWallet', lang)}</Text>
+                </TouchableOpacity>
+              </View>
+            </KeyboardAvoidingView>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
+      {/* Connect Bybit Exchange Modal */}
+      <Modal
+        visible={isConnectModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setIsConnectModalVisible(false)}
+      >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <View style={styles.modalOverlay}>
+            <KeyboardAvoidingView 
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              style={styles.modalContent}
+            >
+              <Text style={styles.modalTitle}>{lang === 'ru' ? 'Подключение биржи Bybit' : 'Connect Bybit Exchange'}</Text>
+              
+              <Text style={styles.inputLabel}>{t('exchangeLabel', lang)}</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder={t('exchangePlaceholder', lang)}
+                placeholderTextColor="#666"
+                value={exchangeLabel}
+                onChangeText={setExchangeLabel}
+              />
+
+              <Text style={styles.inputLabel}>{t('apiKeyLabel', lang)}</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder={lang === 'ru' ? 'Введите API Key Bybit' : 'Enter Bybit API Key'}
+                placeholderTextColor="#666"
+                value={apiKey}
+                onChangeText={setApiKey}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+
+              <Text style={styles.inputLabel}>{t('apiSecretLabel', lang)}</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder={lang === 'ru' ? 'Введите API Secret Bybit' : 'Enter Bybit API Secret'}
+                placeholderTextColor="#666"
+                value={apiSecret}
+                onChangeText={setApiSecret}
+                secureTextEntry={true}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+                <Text style={styles.inputLabel}>{t('testnetLabel', lang)}</Text>
+                <Switch
+                  value={isTestnet}
+                  onValueChange={setIsTestnet}
+                  trackColor={{ false: '#333', true: '#2196F3' }}
+                  thumbColor={isTestnet ? '#FFF' : '#AAA'}
+                />
+              </View>
+              
+              <View style={styles.modalButtons}>
+                <TouchableOpacity 
+                  style={[styles.modalButton, styles.cancelButton]} 
+                  onPress={() => setIsConnectModalVisible(false)}
+                  disabled={isTestingConnection}
+                >
+                  <Text style={styles.buttonText}>{t('cancel', lang)}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={[styles.modalButton, styles.saveButton, { backgroundColor: '#2196F3' }]} 
+                  onPress={handleConnectExchange}
+                  disabled={isTestingConnection}
+                >
+                  {isTestingConnection ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.buttonText}>{lang === 'ru' ? 'Подключить' : 'Connect'}</Text>
+                  )}
                 </TouchableOpacity>
               </View>
             </KeyboardAvoidingView>
@@ -294,28 +558,41 @@ export default function AccountsScreen() {
         animationType="slide"
         onRequestClose={() => setIsHistoryVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { maxHeight: '80%' }]}>
-            <Text style={styles.modalTitle}>{historyAccount?.name} Balance History</Text>
-            
-            <FlatList
-              data={historyData}
-              keyExtractor={(item, index) => item.id || index.toString()}
-              renderItem={renderHistoryItem}
-              contentContainerStyle={{ gap: 12, paddingVertical: 10 }}
-              ListEmptyComponent={
-                <Text style={{ color: '#888', textAlign: 'center', marginVertical: 20 }}>No balance history found.</Text>
-              }
-            />
-            
-            <TouchableOpacity 
-              style={[styles.modalButton, styles.cancelButton, { marginTop: 16 }]} 
-              onPress={() => setIsHistoryVisible(false)}
-            >
-              <Text style={styles.buttonText}>Close</Text>
-            </TouchableOpacity>
+        <TouchableWithoutFeedback onPress={() => setIsHistoryVisible(false)}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={[styles.modalContent, { maxHeight: '80%' }]}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                  <Text style={[styles.modalTitle, { marginBottom: 0 }]}>
+                    {historyAccount?.name} {lang === 'ru' ? 'История балансов' : 'Balance History'}
+                  </Text>
+                  <TouchableOpacity onPress={() => setIsHistoryVisible(false)} style={{ padding: 4 }}>
+                    <Text style={{ color: '#888', fontSize: 18, fontWeight: 'bold' }}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+                
+                <FlatList
+                  data={historyData}
+                  keyExtractor={(item, index) => item.id || index.toString()}
+                  renderItem={renderHistoryItem}
+                  contentContainerStyle={{ gap: 12, paddingVertical: 10 }}
+                  ListEmptyComponent={
+                    <Text style={{ color: '#888', textAlign: 'center', marginVertical: 20 }}>
+                      {lang === 'ru' ? 'История балансов не найдена.' : 'No balance history found.'}
+                    </Text>
+                  }
+                />
+                
+                <TouchableOpacity 
+                  style={[styles.modalButton, styles.cancelButton, { marginTop: 16 }]} 
+                  onPress={() => setIsHistoryVisible(false)}
+                >
+                  <Text style={styles.buttonText}>{t('close', lang)}</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableWithoutFeedback>
           </View>
-        </View>
+        </TouchableWithoutFeedback>
       </Modal>
     </View>
   );

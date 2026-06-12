@@ -49,6 +49,12 @@ export function initializeDatabase() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS exchange_rates (
+      currency TEXT PRIMARY KEY,
+      rate_to_usd REAL NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS exchange_connections (
       id TEXT PRIMARY KEY,
       exchange TEXT NOT NULL,
@@ -66,6 +72,11 @@ export function initializeDatabase() {
       message TEXT NOT NULL,
       metadata_json TEXT,
       created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
     );
   `);
 }

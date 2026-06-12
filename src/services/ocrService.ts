@@ -81,23 +81,54 @@ export interface ParsedBalance {
 }
 
 export async function parseBalanceFromOcrText(ocrText: string): Promise<ParsedBalance | null> {
-  const prompt = `You are a financial parsing bot. 
-Extract the bank/service name, the main balance amount, and the currency from the following OCR text.
+  const systemPrompt = `You are a financial parsing bot. 
+Extract the bank/service name, the main balance amount, and the currency from the provided OCR text.
 If there are multiple accounts or balances, extract the main primary balance.
+If the bank, exchange, or wallet name is not visible or cannot be determined from the text, use "Unknown" as the bank name. Do not fail if the name is not present.
+
+Examples:
+OCR TEXT:
+В Кошельке Kaspi Gold: 1102420 KZT (USD эквивалент: $2425.32).
+JSON response:
+{
+  "bank": "Kaspi Gold",
+  "amount": 1102420,
+  "currency": "KZT"
+}
+
+OCR TEXT:
+Sberbank Online
+Balance: 15,230.50 RUB
+JSON response:
+{
+  "bank": "Sberbank",
+  "amount": 15230.50,
+  "currency": "RUB"
+}
+
+OCR TEXT:
+Bybit Card
+Balance: 760 USD
+JSON response:
+{
+  "bank": "Bybit Card",
+  "amount": 760,
+  "currency": "USD"
+}
+
 Return ONLY a valid JSON object of this structure:
 {
   "bank": "Bank Name",
   "amount": 12345.67,
-  "currency": "KZT" or "RUB" or "USD" etc. (use standard currency codes)
+  "currency": "CURRENCY_CODE"
 }
-Do not include any markdown format blocks or extra text outside the JSON.
+Do not include any markdown format blocks or extra text outside the JSON.`;
 
-OCR TEXT:
-${ocrText}`;
+  const userPrompt = `OCR TEXT:\n${ocrText}`;
 
   console.log("Sending OCR text to local LLM for parsing...");
   try {
-    const response = await askLocalQVAC(prompt);
+    const response = await askLocalQVAC(systemPrompt, userPrompt);
     console.log("LLM Parsing Response:", response.message);
 
     const jsonMatch = response.message.match(/\{[\s\S]*?\}/);

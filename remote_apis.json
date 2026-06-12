@@ -1,0 +1,42 @@
+{
+  "project": "Muffin AI",
+  "remote_apis": [
+    {
+      "name": "Hugging Face Qwen Model Download",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
+      "purpose": "Downloading the local GGUF model for on-device financial inference and RAG",
+      "critical": true
+    },
+
+    {
+      "name": "CoinGecko API",
+      "url": "https://api.coingecko.com/api/v3/simple/price",
+      "purpose": "Fetching real-time cryptocurrency price indices (e.g. BTC/USD)",
+      "critical": false
+    },
+    {
+      "name": "ExchangeRate-API",
+      "url": "https://open.er-api.com/v6/latest/USD",
+      "purpose": "Fetching real-time fiat exchange rates for local currency conversion (KZT, EUR, RUB to USD)",
+      "critical": false
+    },
+    {
+      "name": "CryptoCompare API",
+      "url": "https://min-api.cryptocompare.com/data/pricemulti",
+      "purpose": "Fetching real-time cryptocurrency rates for asset valuations (BTC, ETH, SOL, APT to USD)",
+      "critical": false
+    },
+    {
+      "name": "Solana RPC Provider Mainnet",
+      "url": "https://api.mainnet-beta.solana.com",
+      "purpose": "Fetching mainnet public wallet token and native balances",
+      "critical": false
+    },
+    {
+      "name": "Aptos RPC Provider Mainnet",
+      "url": "https://fullnode.mainnet.aptoslabs.com",
+      "purpose": "Fetching mainnet public wallet token and native balances",
+      "critical": false
+    }
+  ]
+}

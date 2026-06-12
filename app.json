@@ -10,7 +10,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.muffin.ai",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSMicrophoneUsageDescription": "Allow Muffin AI to access your microphone for voice commands."
       }
     },
     "android": {
@@ -21,7 +22,10 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.muffin.ai"
+      "package": "com.muffin.ai",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
