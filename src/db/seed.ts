@@ -1,6 +1,61 @@
 import { db, getFirst } from './database';
 
+function ensureOwnerTypeColumn() {
+  const columns = db.getAllSync('PRAGMA table_info(accounts);') as Array<{ name: string }>;
+  const hasOwnerType = columns.some((column) => column.name === 'owner_type');
+  if (!hasOwnerType) {
+    console.log('Adding owner_type column to accounts...');
+    db.runSync("ALTER TABLE accounts ADD COLUMN owner_type TEXT DEFAULT 'personal';");
+  }
+  db.runSync("UPDATE accounts SET owner_type = 'personal' WHERE owner_type IS NULL OR owner_type = '';");
+}
+
+function ensureAccountWithSnapshot(
+  id: string,
+  name: string,
+  type: string,
+  ownerType: 'personal' | 'company',
+  source: string,
+  currency: string,
+  amount: number,
+  usdValue: number,
+  now: string,
+  appUrl: string | null = null
+) {
+  const existing = getFirst('SELECT id FROM accounts WHERE id = ?;', [id]);
+  if (!existing) {
+    db.runSync(
+      'INSERT INTO accounts (id, name, type, owner_type, source, currency, address, app_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, name, type, ownerType, source, currency, null, appUrl, now]
+    );
+  } else {
+    db.runSync(
+      'UPDATE accounts SET name = ?, type = ?, owner_type = ?, source = ?, currency = ?, app_url = COALESCE(app_url, ?) WHERE id = ?',
+      [name, type, ownerType, source, currency, appUrl, id]
+    );
+  }
+
+  const snapshot = getFirst('SELECT id FROM balance_snapshots WHERE account_id = ? LIMIT 1;', [id]);
+  if (!snapshot) {
+    db.runSync(
+      'INSERT INTO balance_snapshots (id, account_id, amount, currency, usd_value, source, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [`snap_${id}`, id, amount, currency, usdValue, source, 1.0, now]
+    );
+  }
+}
+
+function ensureCompanyAccounts(now: string) {
+  ensureAccountWithSnapshot('acc_company_paypal', 'Company PayPal', 'paypal', 'company', 'manual', 'USD', 0, 0, now);
+  ensureAccountWithSnapshot('acc_company_bcc_kzt', 'Company BCC Центркредитбанк KZT', 'bank', 'company', 'manual', 'KZT', 0, 0, now);
+  ensureAccountWithSnapshot('acc_company_kaspi_kzt', 'Company Kaspi KZT', 'bank', 'company', 'manual', 'KZT', 0, 0, now, 'kaspi://');
+  ensureAccountWithSnapshot('acc_company_tbank_rub', 'Company T-Bank RU', 'bank', 'company', 'manual', 'RUB', 0, 0, now);
+  ensureAccountWithSnapshot('acc_company_alfa_rub', 'Company Alfa Bank RU', 'bank', 'company', 'manual', 'RUB', 0, 0, now);
+}
+
 export function seedDatabase() {
+  const now = new Date().toISOString();
+  ensureOwnerTypeColumn();
+
   const result = getFirst('SELECT count(*) as count FROM accounts;');
   if (result && result.count > 0) {
     try {
@@ -35,6 +90,8 @@ export function seedDatabase() {
         SET usd_value = amount * ?
         WHERE currency = 'RUB' AND ABS(usd_value - amount) < 0.001 AND amount > 0;
       `, [rubRate]);
+
+      ensureCompanyAccounts(now);
     } catch (e) {
       console.error('Migration error:', e);
     }
@@ -42,8 +99,6 @@ export function seedDatabase() {
   }
 
   console.log('Seeding demo database...');
-
-  const now = new Date().toISOString();
 
   // Accounts
   db.runSync(
@@ -70,6 +125,7 @@ export function seedDatabase() {
     'INSERT INTO accounts (id, name, type, source, currency, address, app_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ['acc_cash', 'Cash USD', 'cash', 'manual', 'USD', null, null, now]
   );
+  ensureCompanyAccounts(now);
 
   // Balance Snapshots
   db.runSync(

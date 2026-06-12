@@ -146,7 +146,7 @@ export function getLatestBalances() {
   // Retrieve the latest balance snapshot for each account by selecting the snapshot ID
   // with the maximum creation timestamp for that account.
   const rows = getAll(`
-    SELECT a.id, a.name, a.source, a.address, b.amount, b.currency, b.usd_value, b.created_at
+    SELECT a.id, a.name, a.type, a.owner_type, a.source, a.address, b.amount, b.currency, b.usd_value, b.created_at
     FROM accounts a
     LEFT JOIN balance_snapshots b ON a.id = b.account_id
     WHERE b.id = (

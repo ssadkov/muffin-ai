@@ -6,6 +6,7 @@ export function initializeDatabase() {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       type TEXT NOT NULL,
+      owner_type TEXT DEFAULT 'personal',
       source TEXT NOT NULL,
       currency TEXT,
       address TEXT,

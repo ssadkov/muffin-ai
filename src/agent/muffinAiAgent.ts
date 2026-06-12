@@ -41,7 +41,7 @@ function buildContextString(): string {
   let total = 0;
   accounts.forEach(a => {
     // Include account ID and currency to help the LLM match them correctly
-    context += `- ${a.name} (ID: ${a.id}): ${a.amount} ${a.currency || 'USD'} (USD: $${a.usd_value})\n`;
+    context += `- ${a.name} (ID: ${a.id}, owner: ${a.owner_type || 'personal'}): ${a.amount} ${a.currency || 'USD'} (USD: $${a.usd_value})\n`;
     total += a.usd_value;
   });
 
@@ -275,7 +275,7 @@ const COMMAND_JSON_SCHEMA = {
 
 function getAccountListString(accounts: ReturnType<typeof getLatestBalances>): string {
   return accounts
-    .map((account) => `- ${account.name}: id=${account.id}, currency=${account.currency || 'USD'}`)
+    .map((account) => `- ${account.name}: id=${account.id}, owner=${account.owner_type || 'personal'}, currency=${account.currency || 'USD'}`)
     .join('\n');
 }
 
@@ -346,6 +346,7 @@ Rules:
 - set means current balance/state.
 - add means deposit/received/plus.
 - subtract means spend/withdraw/minus.
+- If the user says company/business/corporate, prefer owner=company accounts. If they do not, prefer owner=personal for ambiguous bank names like Kaspi or BCC.
 - Use only account IDs from the account list.`;
 
   const recentTool = chatHistory

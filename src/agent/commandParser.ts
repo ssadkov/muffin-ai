@@ -2,6 +2,7 @@ type AccountLike = {
   id: string;
   name: string;
   currency?: string | null;
+  owner_type?: string | null;
 };
 
 export type ParsedCommand =
@@ -184,6 +185,32 @@ function hasAny(text: string, keywords: string[]): boolean {
   return keywords.some((keyword) => text.includes(keyword));
 }
 
+function asksForCompanyAccount(text: string): boolean {
+  return hasAny(text, [
+    'company',
+    'business',
+    'corp',
+    'corporate',
+    '\u043a\u043e\u043c\u043f\u0430\u043d',
+    '\u0431\u0438\u0437\u043d\u0435\u0441',
+    '\u044e\u0440',
+    '\u0442\u043e\u043e',
+    '\u043e\u043e\u043e',
+  ]);
+}
+
+function asksForPersonalAccount(text: string): boolean {
+  return hasAny(text, [
+    'personal',
+    'private',
+    '\u043b\u0438\u0447\u043d',
+    '\u0444\u0438\u0437',
+    '\u0444\u0438\u0437\u0438\u0447',
+    '\u043c\u043e\u0439',
+    '\u043c\u043e\u044f',
+  ]);
+}
+
 function detectOperation(text: string): 'add' | 'subtract' | 'set' | null {
   if (hasAny(text, OP_KEYWORDS.subtract)) return 'subtract';
   if (hasAny(text, OP_KEYWORDS.add)) return 'add';
@@ -248,6 +275,22 @@ function accountAliases(account: AccountLike): string[] {
   if (combined.includes('cash')) aliases.push('cash', '\u043d\u0430\u043b\u0438\u0447');
   if (combined.includes('bybit')) aliases.push('bybit', 'by bit');
   if (combined.includes('kaspi')) aliases.push('kaspi', '\u043a\u0430\u0441\u043f\u0438');
+  if (combined.includes('bcc') || combined.includes('centercredit') || combined.includes('центр')) {
+    aliases.push('bcc', 'centercredit', 'center credit', '\u0446\u0435\u043d\u0442\u0440\u043a\u0440\u0435\u0434\u0438\u0442', '\u0431\u0446\u043a');
+  }
+  if (combined.includes('paypal')) aliases.push('paypal', 'pay pal', '\u043f\u0435\u0439\u043f\u0430\u043b');
+  if (combined.includes('tbank') || combined.includes('t-bank')) {
+    aliases.push('tbank', 't-bank', 't bank', '\u0442\u0431\u0430\u043d\u043a', '\u0442 \u0431\u0430\u043d\u043a', '\u0442-\u0431\u0430\u043d\u043a');
+  }
+  if (combined.includes('alfa')) aliases.push('alfa', 'alpha', 'alfa bank', '\u0430\u043b\u044c\u0444\u0430', '\u0430\u043b\u044c\u0444\u0430 \u0431\u0430\u043d\u043a');
+  if ((account.owner_type || '').toLowerCase() === 'company' || combined.includes('company')) {
+    aliases.push(
+      `company ${name}`,
+      '\u043a\u043e\u043c\u043f\u0430\u043d\u0438\u044f ' + name,
+      '\u0431\u0438\u0437\u043d\u0435\u0441 ' + name,
+      '\u044e\u0440 ' + name
+    );
+  }
   if (combined.includes('okx')) aliases.push('okx', 'ok x');
   if (combined.includes('aptos')) aliases.push('aptos');
   if (combined.includes('solana')) aliases.push('solana', 'sol');
@@ -258,15 +301,29 @@ function accountAliases(account: AccountLike): string[] {
 function findAccount(text: string, accounts: AccountLike[]): { account: AccountLike | null; confidence: number } {
   const normalized = normalizeText(text);
   const compactText = compact(text);
+  const wantsCompany = asksForCompanyAccount(normalized);
+  const wantsPersonal = asksForPersonalAccount(normalized);
   let best: { account: AccountLike | null; confidence: number } = { account: null, confidence: 0 };
 
   for (const account of accounts) {
+    const ownerType = (account.owner_type || 'personal').toLowerCase();
     for (const alias of accountAliases(account)) {
       const aliasNorm = normalizeText(alias);
       const aliasCompact = compact(alias);
       let score = 0;
       if (aliasNorm.length >= 3 && normalized.includes(aliasNorm)) score = Math.max(score, aliasNorm.length > 5 ? 0.96 : 0.82);
       if (aliasCompact.length >= 3 && compactText.includes(aliasCompact)) score = Math.max(score, aliasCompact.length > 5 ? 0.92 : 0.78);
+
+      if (score > 0) {
+        if (wantsCompany && ownerType === 'company') score += 0.08;
+        if (wantsCompany && ownerType !== 'company') score -= 0.18;
+        if (!wantsCompany && ownerType === 'company' && (aliasNorm === 'kaspi' || aliasNorm === '\u043a\u0430\u0441\u043f\u0438' || aliasNorm === 'bcc' || aliasNorm === '\u0431\u0446\u043a')) {
+          score -= 0.2;
+        }
+        if (wantsPersonal && ownerType === 'personal') score += 0.06;
+        if (wantsPersonal && ownerType === 'company') score -= 0.16;
+      }
+
       if (score > best.confidence) best = { account, confidence: score };
     }
   }
