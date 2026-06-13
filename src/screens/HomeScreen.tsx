@@ -49,6 +49,7 @@ export default function HomeScreen() {
   const [paymentSummary, setPaymentSummary] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [isPaymentsModalVisible, setIsPaymentsModalVisible] = useState(false);
+  const [isPaymentEditorVisible, setIsPaymentEditorVisible] = useState(false);
   const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
   const [paymentTitleInput, setPaymentTitleInput] = useState('');
   const [paymentOwnerInput, setPaymentOwnerInput] = useState<OwnerType>('personal');
@@ -202,7 +203,8 @@ export default function HomeScreen() {
 
   const openNewPaymentModal = () => {
     resetPaymentForm();
-    setIsPaymentsModalVisible(true);
+    setIsPaymentsModalVisible(false);
+    setIsPaymentEditorVisible(true);
   };
 
   const openEditPayment = (payment: any) => {
@@ -215,7 +217,8 @@ export default function HomeScreen() {
     setPaymentRemindInput(String(payment.remind_days_before ?? 3));
     setPaymentAccountIdInput(payment.account_id || null);
     setPaymentNoteInput(payment.model_note || '');
-    setIsPaymentsModalVisible(true);
+    setIsPaymentsModalVisible(false);
+    setIsPaymentEditorVisible(true);
   };
 
   const savePayment = async () => {
@@ -246,6 +249,8 @@ export default function HomeScreen() {
       refreshData();
       await schedulePaymentReminders();
       resetPaymentForm();
+      setIsPaymentEditorVisible(false);
+      setIsPaymentsModalVisible(true);
     } catch (e: any) {
       Alert.alert(t('error', lang), e?.message || String(e));
     }
@@ -256,6 +261,28 @@ export default function HomeScreen() {
     refreshData();
     await schedulePaymentReminders();
     if (editingPaymentId === id) resetPaymentForm();
+    setIsPaymentEditorVisible(false);
+    setIsPaymentsModalVisible(true);
+  };
+
+  const confirmRemovePayment = (id: string, title: string) => {
+    Alert.alert(
+      lang === 'ru' ? 'Удалить платеж?' : 'Delete payment?',
+      title,
+      [
+        { text: t('cancel', lang), style: 'cancel' },
+        {
+          text: lang === 'ru' ? 'Удалить' : 'Delete',
+          style: 'destructive',
+          onPress: () => removePayment(id),
+        },
+      ]
+    );
+  };
+
+  const closePaymentEditor = () => {
+    setIsPaymentEditorVisible(false);
+    setIsPaymentsModalVisible(true);
   };
 
   const progress = goal && goal.target_value > 0 ? ((assets / goal.target_value) * 100).toFixed(1) : "0.0";
@@ -474,9 +501,7 @@ export default function HomeScreen() {
                           {payment.account_name ? ` · ${payment.account_name}` : ''}
                         </Text>
                       </TouchableOpacity>
-                      <TouchableOpacity onPress={() => removePayment(payment.id)} style={styles.deleteSmallButton}>
-                        <Text style={styles.deleteSmallText}>{lang === 'ru' ? 'Выкл' : 'Off'}</Text>
-                      </TouchableOpacity>
+                      <Text style={styles.paymentChevron}>›</Text>
                     </View>
                   ))}
                   {payments.length === 0 && (
@@ -484,6 +509,15 @@ export default function HomeScreen() {
                   )}
                 </View>
 
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.cancelButton]}
+                  onPress={() => setIsPaymentsModalVisible(false)}
+                >
+                  <Text style={styles.buttonText}>{t('close', lang)}</Text>
+                </TouchableOpacity>
+
+                {false && (
+                <>
                 <Text style={styles.inputLabel}>{lang === 'ru' ? 'Название' : 'Title'}</Text>
                 <TextInput
                   style={styles.modalInput}
@@ -608,6 +642,192 @@ export default function HomeScreen() {
                     onPress={() => setIsPaymentsModalVisible(false)}
                   >
                     <Text style={styles.buttonText}>{t('close', lang)}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.saveButton]}
+                    onPress={savePayment}
+                  >
+                    <Text style={styles.buttonText}>
+                      {editingPaymentId ? t('save', lang) : (lang === 'ru' ? 'Добавить' : 'Add')}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                </>
+                )}
+              </ScrollView>
+            </KeyboardAvoidingView>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
+      {/* Payment Editor Modal */}
+      <Modal
+        visible={isPaymentEditorVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={closePaymentEditor}
+      >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <View style={styles.modalOverlay}>
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              keyboardVerticalOffset={Platform.OS === 'ios' ? 24 : 0}
+              style={[styles.modalContent, styles.editorModalContent]}
+            >
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="interactive"
+                contentContainerStyle={styles.editorScrollContent}
+              >
+                <View style={styles.modalHeaderRow}>
+                  <Text style={[styles.modalTitle, { marginBottom: 0 }]}>
+                    {editingPaymentId
+                      ? (lang === 'ru' ? 'Редактировать платеж' : 'Edit payment')
+                      : (lang === 'ru' ? 'Новый платеж' : 'New payment')}
+                  </Text>
+                  <TouchableOpacity onPress={closePaymentEditor} style={{ padding: 4 }}>
+                    <Text style={{ color: '#888', fontSize: 18, fontWeight: 'bold' }}>×</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Название' : 'Title'}</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder={lang === 'ru' ? 'Ипотека, кредит, налоги' : 'Mortgage, loan, taxes'}
+                  placeholderTextColor="#666"
+                  value={paymentTitleInput}
+                  onChangeText={setPaymentTitleInput}
+                  returnKeyType="next"
+                />
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Владелец' : 'Owner'}</Text>
+                <View style={styles.segmentedRow}>
+                  <TouchableOpacity
+                    style={[styles.segmentButton, paymentOwnerInput === 'personal' && styles.segmentButtonActive]}
+                    onPress={() => {
+                      setPaymentOwnerInput('personal');
+                      setPaymentAccountIdInput(null);
+                    }}
+                  >
+                    <Text style={[styles.segmentButtonText, paymentOwnerInput === 'personal' && styles.segmentButtonTextActive]}>
+                      Personal
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.segmentButton, paymentOwnerInput === 'company' && styles.segmentButtonActive]}
+                    onPress={() => {
+                      setPaymentOwnerInput('company');
+                      setPaymentAccountIdInput(null);
+                    }}
+                  >
+                    <Text style={[styles.segmentButtonText, paymentOwnerInput === 'company' && styles.segmentButtonTextActive]}>
+                      Company
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.twoColumnRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>{lang === 'ru' ? 'Сумма' : 'Amount'}</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder="450000"
+                      placeholderTextColor="#666"
+                      value={paymentAmountInput}
+                      onChangeText={setPaymentAmountInput}
+                      keyboardType="decimal-pad"
+                      returnKeyType="next"
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>{lang === 'ru' ? 'День месяца' : 'Due day'}</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder="25"
+                      placeholderTextColor="#666"
+                      value={paymentDueDayInput}
+                      onChangeText={setPaymentDueDayInput}
+                      keyboardType="number-pad"
+                      returnKeyType="next"
+                    />
+                  </View>
+                </View>
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Валюта' : 'Currency'}</Text>
+                <View style={styles.segmentedRow}>
+                  {['KZT', 'RUB', 'USD'].map((currency) => (
+                    <TouchableOpacity
+                      key={currency}
+                      style={[styles.segmentButton, paymentCurrencyInput === currency && styles.segmentButtonActive]}
+                      onPress={() => setPaymentCurrencyInput(currency)}
+                    >
+                      <Text style={[styles.segmentButtonText, paymentCurrencyInput === currency && styles.segmentButtonTextActive]}>
+                        {currency}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Счет для оплаты' : 'Payment account'}</Text>
+                <View style={styles.accountPicker}>
+                  <TouchableOpacity
+                    style={[styles.accountChip, paymentAccountIdInput === null && styles.accountChipActive]}
+                    onPress={() => setPaymentAccountIdInput(null)}
+                  >
+                    <Text style={[styles.accountChipText, paymentAccountIdInput === null && styles.accountChipTextActive]}>
+                      {lang === 'ru' ? 'Не привязан' : 'Unassigned'}
+                    </Text>
+                  </TouchableOpacity>
+                  {scopedPaymentAccounts.map((account: any) => (
+                    <TouchableOpacity
+                      key={account.id}
+                      style={[styles.accountChip, paymentAccountIdInput === account.id && styles.accountChipActive]}
+                      onPress={() => setPaymentAccountIdInput(account.id)}
+                    >
+                      <Text style={[styles.accountChipText, paymentAccountIdInput === account.id && styles.accountChipTextActive]}>
+                        {account.name}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Напомнить за N дней' : 'Remind days before'}</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="3"
+                  placeholderTextColor="#666"
+                  value={paymentRemindInput}
+                  onChangeText={setPaymentRemindInput}
+                  keyboardType="number-pad"
+                  returnKeyType="next"
+                />
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Комментарий для AI' : 'AI note'}</Text>
+                <TextInput
+                  style={[styles.modalInput, styles.multilineInput]}
+                  placeholder={lang === 'ru' ? 'Например: платить с company RUB, если не хватает - конвертировать USD' : 'Example: pay from company RUB; convert USD if short'}
+                  placeholderTextColor="#666"
+                  value={paymentNoteInput}
+                  onChangeText={setPaymentNoteInput}
+                  multiline
+                  returnKeyType="done"
+                />
+
+                {editingPaymentId && (
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.destructiveButton]}
+                    onPress={() => confirmRemovePayment(editingPaymentId, paymentTitleInput || '')}
+                  >
+                    <Text style={styles.buttonText}>{lang === 'ru' ? 'Удалить платеж' : 'Delete payment'}</Text>
+                  </TouchableOpacity>
+                )}
+
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.cancelButton]}
+                    onPress={closePaymentEditor}
+                  >
+                    <Text style={styles.buttonText}>{t('cancel', lang)}</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.modalButton, styles.saveButton]}
@@ -768,6 +988,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#333'
   },
+  editorModalContent: {
+    maxHeight: '92%'
+  },
+  editorScrollContent: {
+    paddingBottom: Platform.OS === 'ios' ? 140 : 96
+  },
   modalTitle: {
     color: '#FFF',
     fontSize: 18,
@@ -854,6 +1080,12 @@ const styles = StyleSheet.create({
     color: '#AAA',
     fontSize: 12
   },
+  paymentChevron: {
+    color: '#777',
+    fontSize: 24,
+    fontWeight: '300',
+    paddingHorizontal: 4
+  },
   deleteSmallButton: {
     backgroundColor: '#3A2525',
     borderRadius: 6,
@@ -912,5 +1144,9 @@ const styles = StyleSheet.create({
   },
   saveButton: {
     backgroundColor: '#4CAF50'
+  },
+  destructiveButton: {
+    backgroundColor: '#D32F2F',
+    marginBottom: 12
   }
 });
