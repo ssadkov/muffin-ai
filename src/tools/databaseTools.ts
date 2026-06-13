@@ -6,6 +6,19 @@ export { getRatesMap };
 
 export type OwnerType = 'personal' | 'company';
 
+export type PaymentObligationInput = {
+  id?: string;
+  title: string;
+  ownerType: OwnerType;
+  amount: number;
+  currency: string;
+  dueDay: number;
+  accountId?: string | null;
+  remindDaysBefore: number;
+  modelNote?: string | null;
+  isActive?: boolean;
+};
+
 export function normalizeCurrency(currency: string | null | undefined): string {
   if (!currency) return 'USD';
   const clean = currency.trim().toUpperCase();
@@ -122,6 +135,28 @@ export function updateAccountAddress(id: string, address: string) {
   );
 }
 
+export function updateAccountMetadata(
+  id: string,
+  ownerType: OwnerType,
+  ownershipPercent: number,
+  modelNote: string,
+  currency?: string,
+  address?: string
+) {
+  const normalizedOwner = ownerType === 'company' ? 'company' : 'personal';
+  const safeOwnership = Math.max(0, Math.min(100, Number.isFinite(ownershipPercent) ? ownershipPercent : 100));
+  executeSql(
+    `UPDATE accounts
+     SET owner_type = ?,
+         ownership_percent = ?,
+         model_note = ?,
+         currency = COALESCE(?, currency),
+         address = COALESCE(?, address)
+     WHERE id = ?`,
+    [normalizedOwner, safeOwnership, modelNote.trim(), currency ? normalizeCurrency(currency) : null, address ?? null, id]
+  );
+}
+
 export function createWalletAccount(name: string, source: string, address: string) {
   const now = new Date().toISOString();
   const id = 'acc_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
@@ -148,7 +183,7 @@ export function getLatestBalances() {
   // Retrieve the latest balance snapshot for each account by selecting the snapshot ID
   // with the maximum creation timestamp for that account.
   const rows = getAll(`
-    SELECT a.id, a.name, a.type, a.owner_type, a.model_note, a.ownership_percent, a.source, a.address, b.amount, b.currency, b.usd_value, b.created_at
+    SELECT a.id, a.name, a.type, a.owner_type, a.model_note, a.ownership_percent, a.source, a.address, b.amount, COALESCE(b.currency, a.currency) as currency, b.usd_value, b.created_at
     FROM accounts a
     LEFT JOIN balance_snapshots b ON a.id = b.account_id
     WHERE b.id = (
@@ -218,6 +253,45 @@ export function getPaymentObligations(ownerType?: OwnerType) {
     ${where}
     ORDER BY p.due_day ASC, p.title ASC
   `, params);
+}
+
+export function savePaymentObligation(input: PaymentObligationInput) {
+  const now = new Date().toISOString();
+  const id = input.id || `pay_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const ownerType = input.ownerType === 'company' ? 'company' : 'personal';
+  const title = input.title.trim();
+  const amount = Number(input.amount);
+  const dueDay = Math.max(1, Math.min(28, Math.floor(Number(input.dueDay))));
+  const remindDaysBefore = Math.max(0, Math.min(14, Math.floor(Number(input.remindDaysBefore))));
+
+  if (!title) throw new Error('Payment title is required');
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('Payment amount must be positive');
+
+  executeSql(
+    `INSERT OR REPLACE INTO payment_obligations
+      (id, title, owner_type, amount, currency, due_day, frequency, account_id, remind_days_before, model_note, is_active, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'monthly', ?, ?, ?, ?, COALESCE((SELECT created_at FROM payment_obligations WHERE id = ?), ?))`,
+    [
+      id,
+      title,
+      ownerType,
+      amount,
+      normalizeCurrency(input.currency),
+      dueDay,
+      input.accountId || null,
+      remindDaysBefore,
+      input.modelNote?.trim() || null,
+      input.isActive === false ? 0 : 1,
+      id,
+      now,
+    ]
+  );
+
+  return id;
+}
+
+export function deletePaymentObligation(id: string) {
+  executeSql('UPDATE payment_obligations SET is_active = 0 WHERE id = ?', [id]);
 }
 
 function nextMonthlyDueDate(dueDay: number, now = new Date()) {

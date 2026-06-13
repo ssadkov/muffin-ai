@@ -5,6 +5,7 @@ import {
   StyleSheet, 
   FlatList, 
   SectionList,
+  ScrollView,
   TouchableOpacity, 
   Modal, 
   TextInput, 
@@ -25,7 +26,9 @@ import {
   syncExchangeBalance,
   deleteExchangeConnection,
   syncAllExchanges,
-  getSetting
+  getSetting,
+  updateAccountMetadata,
+  OwnerType
 } from '../tools/databaseTools';
 import { testBybitConnection } from '../services/bybitService';
 import { syncPublicWallets } from '../services/walletSyncService';
@@ -39,6 +42,10 @@ export default function AccountsScreen() {
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [selectedAccount, setSelectedAccount] = useState<any>(null);
   const [addressInput, setAddressInput] = useState('');
+  const [ownerTypeInput, setOwnerTypeInput] = useState<OwnerType>('personal');
+  const [ownershipInput, setOwnershipInput] = useState('100');
+  const [currencyInput, setCurrencyInput] = useState('USD');
+  const [modelNoteInput, setModelNoteInput] = useState('');
 
   useEffect(() => {
     if (isFocused) {
@@ -74,6 +81,10 @@ export default function AccountsScreen() {
   const openEditModal = (account: any) => {
     setSelectedAccount(account);
     setAddressInput(account.address || '');
+    setOwnerTypeInput((account.owner_type === 'company' ? 'company' : 'personal') as OwnerType);
+    setOwnershipInput(String(account.ownership_percent || 100));
+    setCurrencyInput(account.currency || 'USD');
+    setModelNoteInput(account.model_note || '');
     setIsEditModalVisible(true);
   };
 
@@ -84,13 +95,22 @@ export default function AccountsScreen() {
     setIsHistoryVisible(true);
   };
 
-  const saveAddress = () => {
+  const saveAccountConfig = () => {
     if (!selectedAccount) return;
     
     const trimmedAddress = addressInput.trim();
+    const parsedOwnership = parseFloat(ownershipInput);
     
     try {
       updateAccountAddress(selectedAccount.id, trimmedAddress);
+      updateAccountMetadata(
+        selectedAccount.id,
+        ownerTypeInput,
+        Number.isFinite(parsedOwnership) ? parsedOwnership : 100,
+        modelNoteInput,
+        currencyInput,
+        trimmedAddress
+      );
       
       // Refresh state
       setAccounts(getLatestBalances());
@@ -98,6 +118,9 @@ export default function AccountsScreen() {
       setIsEditModalVisible(false);
       setSelectedAccount(null);
       setAddressInput('');
+      setOwnershipInput('100');
+      setCurrencyInput('USD');
+      setModelNoteInput('');
     } catch (e) {
       console.error(e);
       Alert.alert(t('error', lang), t('saveAddressError', lang));
@@ -312,7 +335,12 @@ export default function AccountsScreen() {
 
         <View style={styles.cardFooter}>
           <Text style={styles.source}>{item.source}</Text>
-          <Text style={styles.date}>{item.created_at ? new Date(item.created_at).toLocaleDateString() : 'N/A'}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={styles.date}>{item.created_at ? new Date(item.created_at).toLocaleDateString() : 'N/A'}</Text>
+            <TouchableOpacity style={styles.inlineEditButton} onPress={() => openEditModal(item)}>
+              <Text style={styles.inlineEditText}>{lang === 'ru' ? 'Настроить' : 'Configure'}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
         <Text style={styles.tapTip}>{t('tapToViewHistory', lang)}</Text>
       </TouchableOpacity>
@@ -424,34 +452,92 @@ export default function AccountsScreen() {
               behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
               style={styles.modalContent}
             >
-              <Text style={styles.modalTitle}>
-                {t('editAddress', lang)}: {selectedAccount?.name}
-              </Text>
-              
-              <TextInput
-                style={styles.modalInput}
-                placeholder={t('publicAddressPlaceholder', lang)}
-                placeholderTextColor="#666"
-                value={addressInput}
-                onChangeText={setAddressInput}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              
-              <View style={styles.modalButtons}>
-                <TouchableOpacity 
-                  style={[styles.modalButton, styles.cancelButton]} 
-                  onPress={() => setIsEditModalVisible(false)}
-                >
-                  <Text style={styles.buttonText}>{t('cancel', lang)}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.modalButton, styles.saveButton]} 
-                  onPress={saveAddress}
-                >
-                  <Text style={styles.buttonText}>{t('save', lang)}</Text>
-                </TouchableOpacity>
-              </View>
+              <ScrollView contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
+                <Text style={styles.modalTitle}>
+                  {lang === 'ru' ? 'Настройка счета' : 'Account settings'}: {selectedAccount?.name}
+                </Text>
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Владелец' : 'Owner'}</Text>
+                <View style={styles.segmentedRow}>
+                  <TouchableOpacity
+                    style={[styles.segmentButton, ownerTypeInput === 'personal' && styles.segmentButtonActive]}
+                    onPress={() => setOwnerTypeInput('personal')}
+                  >
+                    <Text style={[styles.segmentButtonText, ownerTypeInput === 'personal' && styles.segmentButtonTextActive]}>
+                      Personal
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.segmentButton, ownerTypeInput === 'company' && styles.segmentButtonActive]}
+                    onPress={() => setOwnerTypeInput('company')}
+                  >
+                    <Text style={[styles.segmentButtonText, ownerTypeInput === 'company' && styles.segmentButtonTextActive]}>
+                      Company
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Твоя доля, %' : 'Your share, %'}</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="100"
+                  placeholderTextColor="#666"
+                  value={ownershipInput}
+                  onChangeText={setOwnershipInput}
+                  keyboardType="numeric"
+                />
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Валюта счета' : 'Account currency'}</Text>
+                <View style={styles.segmentedRow}>
+                  {['USD', 'KZT', 'RUB'].map((currency) => (
+                    <TouchableOpacity
+                      key={currency}
+                      style={[styles.segmentButton, currencyInput === currency && styles.segmentButtonActive]}
+                      onPress={() => setCurrencyInput(currency)}
+                    >
+                      <Text style={[styles.segmentButtonText, currencyInput === currency && styles.segmentButtonTextActive]}>
+                        {currency}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Комментарий для AI' : 'AI note'}</Text>
+                <TextInput
+                  style={[styles.modalInput, styles.multilineInput]}
+                  placeholder={lang === 'ru' ? 'Например: деньги компании, мне принадлежит 40%, рубли' : 'Example: company money, my share is 40%, RUB'}
+                  placeholderTextColor="#666"
+                  value={modelNoteInput}
+                  onChangeText={setModelNoteInput}
+                  multiline
+                />
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Адрес / реквизиты' : 'Address / details'}</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder={t('publicAddressPlaceholder', lang)}
+                  placeholderTextColor="#666"
+                  value={addressInput}
+                  onChangeText={setAddressInput}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity 
+                    style={[styles.modalButton, styles.cancelButton]} 
+                    onPress={() => setIsEditModalVisible(false)}
+                  >
+                    <Text style={styles.buttonText}>{t('cancel', lang)}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={[styles.modalButton, styles.saveButton]} 
+                    onPress={saveAccountConfig}
+                  >
+                    <Text style={styles.buttonText}>{t('save', lang)}</Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
             </KeyboardAvoidingView>
           </View>
         </TouchableWithoutFeedback>
@@ -731,6 +817,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500'
   },
+  inlineEditButton: {
+    backgroundColor: '#2A2A2A',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4
+  },
+  inlineEditText: {
+    color: '#9CCC65',
+    fontSize: 11,
+    fontWeight: '700'
+  },
 
   modalOverlay: {
     flex: 1,
@@ -767,6 +864,36 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     borderWidth: 1,
     borderColor: '#444'
+  },
+  multilineInput: {
+    minHeight: 78,
+    textAlignVertical: 'top'
+  },
+  segmentedRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16
+  },
+  segmentButton: {
+    flex: 1,
+    backgroundColor: '#2A2A2A',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#444',
+    paddingVertical: 10,
+    alignItems: 'center'
+  },
+  segmentButtonActive: {
+    borderColor: '#4CAF50',
+    backgroundColor: 'rgba(76, 175, 80, 0.12)'
+  },
+  segmentButtonText: {
+    color: '#AAA',
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  segmentButtonTextActive: {
+    color: '#4CAF50'
   },
   networkSelector: {
     flexDirection: 'row',

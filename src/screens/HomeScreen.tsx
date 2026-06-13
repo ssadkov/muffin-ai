@@ -24,7 +24,11 @@ import {
   getSetting, 
   setSetting,
   getBalanceGroups,
-  getPaymentCoverageSummary
+  getPaymentCoverageSummary,
+  getPaymentObligations,
+  savePaymentObligation,
+  deletePaymentObligation,
+  OwnerType
 } from '../tools/databaseTools';
 import { checkMoneyRules } from '../tools/rulesTools';
 import { fetchAndUpdateRates, getLastRatesUpdate } from '../services/exchangeRateService';
@@ -43,6 +47,17 @@ export default function HomeScreen() {
   const [lang, setLang] = useState<Language>('ru');
   const [balanceGroups, setBalanceGroups] = useState<any>(null);
   const [paymentSummary, setPaymentSummary] = useState<any>(null);
+  const [payments, setPayments] = useState<any[]>([]);
+  const [isPaymentsModalVisible, setIsPaymentsModalVisible] = useState(false);
+  const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
+  const [paymentTitleInput, setPaymentTitleInput] = useState('');
+  const [paymentOwnerInput, setPaymentOwnerInput] = useState<OwnerType>('personal');
+  const [paymentAmountInput, setPaymentAmountInput] = useState('');
+  const [paymentCurrencyInput, setPaymentCurrencyInput] = useState('KZT');
+  const [paymentDueDayInput, setPaymentDueDayInput] = useState('25');
+  const [paymentRemindInput, setPaymentRemindInput] = useState('3');
+  const [paymentAccountIdInput, setPaymentAccountIdInput] = useState<string | null>(null);
+  const [paymentNoteInput, setPaymentNoteInput] = useState('');
 
   // Goal modal states
   const [isGoalModalVisible, setIsGoalModalVisible] = useState(false);
@@ -80,6 +95,7 @@ export default function HomeScreen() {
     setAssets(getTotalLiquidAssets());
     setBalanceGroups(getBalanceGroups());
     setPaymentSummary(getPaymentCoverageSummary(31));
+    setPayments(getPaymentObligations());
     const goals = getActiveGoals();
     if (goals.length > 0) {
       setGoal(goals[0]);
@@ -172,7 +188,79 @@ export default function HomeScreen() {
     );
   };
 
+  const resetPaymentForm = () => {
+    setEditingPaymentId(null);
+    setPaymentTitleInput('');
+    setPaymentOwnerInput('personal');
+    setPaymentAmountInput('');
+    setPaymentCurrencyInput('KZT');
+    setPaymentDueDayInput('25');
+    setPaymentRemindInput('3');
+    setPaymentAccountIdInput(null);
+    setPaymentNoteInput('');
+  };
+
+  const openNewPaymentModal = () => {
+    resetPaymentForm();
+    setIsPaymentsModalVisible(true);
+  };
+
+  const openEditPayment = (payment: any) => {
+    setEditingPaymentId(payment.id);
+    setPaymentTitleInput(payment.title || '');
+    setPaymentOwnerInput(payment.owner_type === 'company' ? 'company' : 'personal');
+    setPaymentAmountInput(String(payment.amount || ''));
+    setPaymentCurrencyInput(payment.currency || 'KZT');
+    setPaymentDueDayInput(String(payment.due_day || 25));
+    setPaymentRemindInput(String(payment.remind_days_before ?? 3));
+    setPaymentAccountIdInput(payment.account_id || null);
+    setPaymentNoteInput(payment.model_note || '');
+    setIsPaymentsModalVisible(true);
+  };
+
+  const savePayment = async () => {
+    const amount = parseFloat(paymentAmountInput);
+    const dueDay = parseInt(paymentDueDayInput, 10);
+    const remindDaysBefore = parseInt(paymentRemindInput, 10);
+
+    if (!paymentTitleInput.trim() || !Number.isFinite(amount) || amount <= 0) {
+      Alert.alert(
+        lang === 'ru' ? 'Проверь платеж' : 'Check payment',
+        lang === 'ru' ? 'Нужно указать название и положительную сумму.' : 'Please enter a title and a positive amount.'
+      );
+      return;
+    }
+
+    try {
+      savePaymentObligation({
+        id: editingPaymentId || undefined,
+        title: paymentTitleInput,
+        ownerType: paymentOwnerInput,
+        amount,
+        currency: paymentCurrencyInput,
+        dueDay: Number.isFinite(dueDay) ? dueDay : 25,
+        accountId: paymentAccountIdInput,
+        remindDaysBefore: Number.isFinite(remindDaysBefore) ? remindDaysBefore : 3,
+        modelNote: paymentNoteInput,
+      });
+      refreshData();
+      await schedulePaymentReminders();
+      resetPaymentForm();
+    } catch (e: any) {
+      Alert.alert(t('error', lang), e?.message || String(e));
+    }
+  };
+
+  const removePayment = async (id: string) => {
+    deletePaymentObligation(id);
+    refreshData();
+    await schedulePaymentReminders();
+    if (editingPaymentId === id) resetPaymentForm();
+  };
+
   const progress = goal && goal.target_value > 0 ? ((assets / goal.target_value) * 100).toFixed(1) : "0.0";
+  const paymentAccounts = balanceGroups ? [...balanceGroups.personal, ...balanceGroups.company] : [];
+  const scopedPaymentAccounts = paymentAccounts.filter((account: any) => (account.owner_type || 'personal') === paymentOwnerInput);
 
   return (
     <View style={styles.container}>
@@ -254,9 +342,14 @@ export default function HomeScreen() {
           <View style={[styles.card, paymentSummary.isCovered ? styles.paymentOkCard : styles.paymentRiskCard]}>
             <View style={styles.cardHeaderRow}>
               <Text style={styles.cardLabel}>{lang === 'ru' ? 'Payment Radar' : 'Payment Radar'}</Text>
-              <Text style={paymentSummary.isCovered ? styles.paymentOkText : styles.paymentRiskText}>
-                {paymentSummary.isCovered ? (lang === 'ru' ? 'Покрыто' : 'Covered') : (lang === 'ru' ? 'Риск' : 'Risk')}
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Text style={paymentSummary.isCovered ? styles.paymentOkText : styles.paymentRiskText}>
+                  {paymentSummary.isCovered ? (lang === 'ru' ? 'Покрыто' : 'Covered') : (lang === 'ru' ? 'Риск' : 'Risk')}
+                </Text>
+                <TouchableOpacity style={styles.miniEditButton} onPress={() => setIsPaymentsModalVisible(true)}>
+                  <Text style={styles.miniEditButtonText}>{lang === 'ru' ? 'Настроить' : 'Manage'}</Text>
+                </TouchableOpacity>
+              </View>
             </View>
             <Text style={styles.paymentTitle}>
               {paymentSummary.payments.length} {lang === 'ru' ? 'платежей за 31 день' : 'payments in 31 days'}
@@ -347,6 +440,189 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      {/* Payments Management Modal */}
+      <Modal
+        visible={isPaymentsModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setIsPaymentsModalVisible(false)}
+      >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <View style={styles.modalOverlay}>
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              style={[styles.modalContent, { maxHeight: '88%' }]}
+            >
+              <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 8 }}>
+                <View style={styles.modalHeaderRow}>
+                  <Text style={[styles.modalTitle, { marginBottom: 0 }]}>
+                    {lang === 'ru' ? 'Платежи' : 'Payments'}
+                  </Text>
+                  <TouchableOpacity onPress={openNewPaymentModal} style={styles.miniEditButton}>
+                    <Text style={styles.miniEditButtonText}>{lang === 'ru' ? 'Новый' : 'New'}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.paymentList}>
+                  {payments.map((payment) => (
+                    <View key={payment.id} style={styles.paymentRow}>
+                      <TouchableOpacity style={{ flex: 1 }} onPress={() => openEditPayment(payment)}>
+                        <Text style={styles.paymentRowTitle}>{payment.title}</Text>
+                        <Text style={styles.paymentRowMeta}>
+                          {payment.owner_type} · {payment.amount} {payment.currency} · {lang === 'ru' ? 'день' : 'day'} {payment.due_day}
+                          {payment.account_name ? ` · ${payment.account_name}` : ''}
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => removePayment(payment.id)} style={styles.deleteSmallButton}>
+                        <Text style={styles.deleteSmallText}>{lang === 'ru' ? 'Выкл' : 'Off'}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  {payments.length === 0 && (
+                    <Text style={styles.emptyText}>{lang === 'ru' ? 'Платежей пока нет.' : 'No payments yet.'}</Text>
+                  )}
+                </View>
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Название' : 'Title'}</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder={lang === 'ru' ? 'Ипотека, кредит, налоги' : 'Mortgage, loan, taxes'}
+                  placeholderTextColor="#666"
+                  value={paymentTitleInput}
+                  onChangeText={setPaymentTitleInput}
+                />
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Владелец' : 'Owner'}</Text>
+                <View style={styles.segmentedRow}>
+                  <TouchableOpacity
+                    style={[styles.segmentButton, paymentOwnerInput === 'personal' && styles.segmentButtonActive]}
+                    onPress={() => {
+                      setPaymentOwnerInput('personal');
+                      setPaymentAccountIdInput(null);
+                    }}
+                  >
+                    <Text style={[styles.segmentButtonText, paymentOwnerInput === 'personal' && styles.segmentButtonTextActive]}>
+                      Personal
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.segmentButton, paymentOwnerInput === 'company' && styles.segmentButtonActive]}
+                    onPress={() => {
+                      setPaymentOwnerInput('company');
+                      setPaymentAccountIdInput(null);
+                    }}
+                  >
+                    <Text style={[styles.segmentButtonText, paymentOwnerInput === 'company' && styles.segmentButtonTextActive]}>
+                      Company
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.twoColumnRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>{lang === 'ru' ? 'Сумма' : 'Amount'}</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder="450000"
+                      placeholderTextColor="#666"
+                      value={paymentAmountInput}
+                      onChangeText={setPaymentAmountInput}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>{lang === 'ru' ? 'День месяца' : 'Due day'}</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder="25"
+                      placeholderTextColor="#666"
+                      value={paymentDueDayInput}
+                      onChangeText={setPaymentDueDayInput}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                </View>
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Валюта' : 'Currency'}</Text>
+                <View style={styles.segmentedRow}>
+                  {['KZT', 'RUB', 'USD'].map((currency) => (
+                    <TouchableOpacity
+                      key={currency}
+                      style={[styles.segmentButton, paymentCurrencyInput === currency && styles.segmentButtonActive]}
+                      onPress={() => setPaymentCurrencyInput(currency)}
+                    >
+                      <Text style={[styles.segmentButtonText, paymentCurrencyInput === currency && styles.segmentButtonTextActive]}>
+                        {currency}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Счет для оплаты' : 'Payment account'}</Text>
+                <View style={styles.accountPicker}>
+                  <TouchableOpacity
+                    style={[styles.accountChip, paymentAccountIdInput === null && styles.accountChipActive]}
+                    onPress={() => setPaymentAccountIdInput(null)}
+                  >
+                    <Text style={[styles.accountChipText, paymentAccountIdInput === null && styles.accountChipTextActive]}>
+                      {lang === 'ru' ? 'Не привязан' : 'Unassigned'}
+                    </Text>
+                  </TouchableOpacity>
+                  {scopedPaymentAccounts.map((account: any) => (
+                    <TouchableOpacity
+                      key={account.id}
+                      style={[styles.accountChip, paymentAccountIdInput === account.id && styles.accountChipActive]}
+                      onPress={() => setPaymentAccountIdInput(account.id)}
+                    >
+                      <Text style={[styles.accountChipText, paymentAccountIdInput === account.id && styles.accountChipTextActive]}>
+                        {account.name}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Напомнить за N дней' : 'Remind days before'}</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="3"
+                  placeholderTextColor="#666"
+                  value={paymentRemindInput}
+                  onChangeText={setPaymentRemindInput}
+                  keyboardType="numeric"
+                />
+
+                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Комментарий для AI' : 'AI note'}</Text>
+                <TextInput
+                  style={[styles.modalInput, styles.multilineInput]}
+                  placeholder={lang === 'ru' ? 'Например: платить с company RUB, если не хватает - конвертировать USD' : 'Example: pay from company RUB; convert USD if short'}
+                  placeholderTextColor="#666"
+                  value={paymentNoteInput}
+                  onChangeText={setPaymentNoteInput}
+                  multiline
+                />
+
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.cancelButton]}
+                    onPress={() => setIsPaymentsModalVisible(false)}
+                  >
+                    <Text style={styles.buttonText}>{t('close', lang)}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.saveButton]}
+                    onPress={savePayment}
+                  >
+                    <Text style={styles.buttonText}>
+                      {editingPaymentId ? t('save', lang) : (lang === 'ru' ? 'Добавить' : 'Add')}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </KeyboardAvoidingView>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
 
       {/* Goal Edit Modal */}
       <Modal
@@ -498,6 +774,12 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginBottom: 16
   },
+  modalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16
+  },
   inputLabel: {
     color: '#AAA',
     fontSize: 13,
@@ -513,6 +795,106 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     borderWidth: 1,
     borderColor: '#444'
+  },
+  multilineInput: {
+    minHeight: 78,
+    textAlignVertical: 'top'
+  },
+  segmentedRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16
+  },
+  segmentButton: {
+    flex: 1,
+    backgroundColor: '#2A2A2A',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#444',
+    paddingVertical: 10,
+    alignItems: 'center'
+  },
+  segmentButtonActive: {
+    borderColor: '#4CAF50',
+    backgroundColor: 'rgba(76, 175, 80, 0.12)'
+  },
+  segmentButtonText: {
+    color: '#AAA',
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  segmentButtonTextActive: {
+    color: '#4CAF50'
+  },
+  twoColumnRow: {
+    flexDirection: 'row',
+    gap: 10
+  },
+  paymentList: {
+    gap: 8,
+    marginBottom: 18
+  },
+  paymentRow: {
+    backgroundColor: '#252525',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#333',
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10
+  },
+  paymentRowTitle: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 3
+  },
+  paymentRowMeta: {
+    color: '#AAA',
+    fontSize: 12
+  },
+  deleteSmallButton: {
+    backgroundColor: '#3A2525',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 6
+  },
+  deleteSmallText: {
+    color: '#EF9A9A',
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  emptyText: {
+    color: '#888',
+    textAlign: 'center',
+    paddingVertical: 12
+  },
+  accountPicker: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 16
+  },
+  accountChip: {
+    backgroundColor: '#2A2A2A',
+    borderWidth: 1,
+    borderColor: '#444',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7
+  },
+  accountChipActive: {
+    borderColor: '#4CAF50',
+    backgroundColor: 'rgba(76, 175, 80, 0.12)'
+  },
+  accountChipText: {
+    color: '#AAA',
+    fontSize: 12,
+    fontWeight: '600'
+  },
+  accountChipTextActive: {
+    color: '#4CAF50'
   },
   modalButtons: {
     flexDirection: 'row',

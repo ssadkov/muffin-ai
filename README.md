@@ -97,6 +97,33 @@ To package the app as a standalone binary that embeds the JS bundle directly (al
 
 ---
 
+## Fast Standalone Updates Without Metro
+
+Muffin AI is configured for **EAS Update**. This gives the hackathon demo a practical flow:
+
+1. Build and install the app once on the iPhone:
+   ```bash
+   npm run build:ios:preview
+   ```
+2. Install the generated internal iOS build from EAS.
+3. Publish JS/UI/database-logic changes without running a local Metro server:
+   ```bash
+   npm run update:preview -- --message "Fix payment settings UI"
+   ```
+4. Restart the app on the phone to receive the latest compatible update.
+
+The `preview` build uses the `preview` EAS channel. Production builds use the `production` channel:
+
+```bash
+npm run update:production -- --message "Release update"
+```
+
+OTA updates are suitable for TypeScript/JavaScript, UI, prompts, deterministic command parsing, SQLite migrations, local business logic, and bundled JS assets. Native changes still require a new build: QVAC SDK/plugin changes, new native packages, permissions, Expo SDK upgrades, app capabilities, and binary-bundled model changes.
+
+Runtime compatibility is controlled by `runtimeVersion.policy = appVersion`, so update the app version and rebuild whenever native compatibility changes.
+
+---
+
 ## 🔍 Hackathon Compliance & Verification Evidence
 
 Muffin AI includes all required items for the QVAC 3-stage validation process:
