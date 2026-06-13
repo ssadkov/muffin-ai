@@ -16,6 +16,7 @@ import {
   Share
 } from 'react-native';
 import { useNavigation, useIsFocused } from '@react-navigation/native';
+import * as Updates from 'expo-updates';
 import { 
   getTotalLiquidAssets, 
   getActiveGoals, 
@@ -36,6 +37,19 @@ import { exportAuditLogs, clearAuditLogs } from '../services/inferenceLogService
 import { syncPublicWallets } from '../services/walletSyncService';
 import { schedulePaymentReminders } from '../services/paymentReminderService';
 import { t, Language } from '../localization/localization';
+
+function shortId(value: string | null | undefined): string {
+  return value ? value.slice(0, 8) : 'embedded';
+}
+
+function getBuildInfoText() {
+  const channel = Updates.channel || 'no-channel';
+  const runtime = Updates.runtimeVersion || 'dev';
+  const updateId = shortId(Updates.updateId);
+  const createdAt = Updates.createdAt ? Updates.createdAt.toLocaleString() : 'local/dev';
+  const source = Updates.isEmbeddedLaunch ? 'embedded' : 'ota';
+  return `build ${runtime} · ${channel} · ${source}:${updateId} · ${createdAt}`;
+}
 
 export default function HomeScreen() {
   const navigation = useNavigation<any>();
@@ -438,7 +452,10 @@ export default function HomeScreen() {
         )}
 
         <View style={[styles.card, { borderColor: '#4CAF50' }]}>
-          <Text style={[styles.cardLabel, { color: '#4CAF50', fontWeight: 'bold' }]}>{t('hackathonLogs', lang)}</Text>
+          <View style={styles.cardHeaderRow}>
+            <Text style={[styles.cardLabel, { color: '#4CAF50', fontWeight: 'bold' }]}>{t('hackathonLogs', lang)}</Text>
+            <Text style={styles.buildBadge}>{getBuildInfoText()}</Text>
+          </View>
           <Text style={{ fontSize: 13, color: '#AAA', fontWeight: 'normal', marginTop: 4, marginBottom: 12 }}>
             {t('hackathonLogsDesc', lang)}
           </Text>
@@ -941,6 +958,13 @@ const styles = StyleSheet.create({
   cardLabel: { color: '#AAA', fontSize: 14 },
   cardValue: { color: '#FFF', fontSize: 28, fontWeight: 'bold' },
   cardHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  buildBadge: {
+    color: '#9CCC65',
+    fontSize: 10,
+    maxWidth: 190,
+    textAlign: 'right',
+    lineHeight: 14
+  },
   splitGrid: { flexDirection: 'row', gap: 12, marginBottom: 16 },
   splitCard: {
     flex: 1,
