@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TouchableOpacity, 
-  ScrollView, 
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Pressable,
+  ScrollView,
   Modal, 
   TextInput, 
   KeyboardAvoidingView, 
@@ -16,7 +17,13 @@ import {
   Share
 } from 'react-native';
 import { useNavigation, useIsFocused } from '@react-navigation/native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import * as Updates from 'expo-updates';
+import { colors, gradients, radius, spacing, fontSize, shadow } from '../theme/theme';
+import Card from '../components/Card';
+import ProgressRing from '../components/ProgressRing';
+import StatusChip from '../components/StatusChip';
 import { 
   getTotalLiquidAssets, 
   getActiveGoals, 
@@ -82,6 +89,9 @@ export default function HomeScreen() {
   // Exchange rates states
   const [isRefreshingRates, setIsRefreshingRates] = useState(false);
   const [lastRatesUpdate, setLastRatesUpdate] = useState<string | null>(null);
+
+  // Collapsible dev / hackathon logs (kept accessible but de-emphasized)
+  const [showDevLogs, setShowDevLogs] = useState(false);
 
   useEffect(() => {
     if (isFocused) {
@@ -305,12 +315,19 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      <ScrollView style={styles.scrollContainer}>
+      <ScrollView
+        style={styles.scrollContainer}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.header}>
-          <Text style={styles.subtitle}>{t('privateMemory', lang)}</Text>
+          <View style={styles.headerTitleWrap}>
+            <Text style={styles.greeting}>{t('appTitle', lang)}</Text>
+            <Text style={styles.subtitle}>{t('privateMemory', lang)}</Text>
+          </View>
           <View style={styles.langToggleContainer}>
-            <TouchableOpacity 
-              style={[styles.langToggleBtn, lang === 'ru' && styles.langToggleBtnActive]} 
+            <TouchableOpacity
+              style={[styles.langToggleBtn, lang === 'ru' && styles.langToggleBtnActive]}
               onPress={() => {
                 setSetting('language', 'ru');
                 setLang('ru');
@@ -318,8 +335,8 @@ export default function HomeScreen() {
             >
               <Text style={[styles.langToggleText, lang === 'ru' && styles.langToggleTextActive]}>RU</Text>
             </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.langToggleBtn, lang === 'en' && styles.langToggleBtnActive]} 
+            <TouchableOpacity
+              style={[styles.langToggleBtn, lang === 'en' && styles.langToggleBtnActive]}
               onPress={() => {
                 setSetting('language', 'en');
                 setLang('en');
@@ -330,72 +347,90 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        <TouchableOpacity 
-          style={styles.card} 
+        {/* Hero: total liquid assets */}
+        <Pressable
           onPress={() => navigation.navigate('Accounts')}
-          activeOpacity={0.7}
+          style={({ pressed }) => pressed && { opacity: 0.92 }}
         >
-          <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardLabel}>{t('totalLiquidAssets', lang)}</Text>
-            <TouchableOpacity 
-              onPress={refreshExchangeRates} 
-              style={[styles.miniEditButton, { backgroundColor: isRefreshingRates ? '#2E2E2E' : '#333' }]}
-              disabled={isRefreshingRates}
-            >
-              <Text style={styles.miniEditButtonText}>
-                {isRefreshingRates ? t('updatingRates', lang) : t('liveRates', lang)}
+          <LinearGradient
+            colors={gradients.hero}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.heroCard}
+          >
+            <View style={styles.heroTopRow}>
+              <Text style={styles.heroLabel}>{t('totalLiquidAssets', lang)}</Text>
+              <TouchableOpacity
+                onPress={refreshExchangeRates}
+                style={styles.ratePill}
+                disabled={isRefreshingRates}
+              >
+                {isRefreshingRates ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <Ionicons name="refresh" size={13} color="#FFF" />
+                )}
+                <Text style={styles.ratePillText}>
+                  {isRefreshingRates
+                    ? (lang === 'ru' ? 'Обновление…' : 'Updating…')
+                    : (lang === 'ru' ? 'Курсы онлайн' : 'Live rates')}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.heroValue}>${assets.toLocaleString()}</Text>
+            {lastRatesUpdate && (
+              <Text style={styles.heroSub}>
+                {t('ratesUpdated', lang)}: {new Date(lastRatesUpdate).toLocaleString()}
               </Text>
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.cardValue}>${assets.toLocaleString()}</Text>
-          {lastRatesUpdate && (
-            <Text style={styles.ratesUpdateTime}>
-              {t('ratesUpdated', lang)}: {new Date(lastRatesUpdate).toLocaleString()}
-            </Text>
-          )}
-        </TouchableOpacity>
+            )}
+          </LinearGradient>
+        </Pressable>
 
         {balanceGroups && (
           <View style={styles.splitGrid}>
-            <TouchableOpacity
-              style={styles.splitCard}
-              onPress={() => navigation.navigate('Accounts')}
-              activeOpacity={0.7}
-            >
+            <Card onPress={() => navigation.navigate('Accounts')} style={styles.splitCard}>
+              <View style={[styles.splitIcon, { backgroundColor: colors.accentSoft }]}>
+                <Ionicons name="person-outline" size={16} color={colors.accent} />
+              </View>
               <Text style={styles.splitLabel}>{lang === 'ru' ? 'Личные счета' : 'Personal'}</Text>
               <Text style={styles.splitValue}>${balanceGroups.personalUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.splitCard, { borderColor: '#3F51B5' }]}
-              onPress={() => navigation.navigate('Accounts')}
-              activeOpacity={0.7}
-            >
+            </Card>
+            <Card onPress={() => navigation.navigate('Accounts')} style={styles.splitCard}>
+              <View style={[styles.splitIcon, { backgroundColor: colors.infoSoft }]}>
+                <Ionicons name="business-outline" size={16} color={colors.info} />
+              </View>
               <Text style={styles.splitLabel}>{lang === 'ru' ? 'Компания' : 'Company'}</Text>
               <Text style={styles.splitValue}>${balanceGroups.companyUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Text>
               <Text style={styles.splitSub}>
                 {lang === 'ru' ? 'твоя доля' : 'owned'} ${balanceGroups.companyOwnedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
               </Text>
-            </TouchableOpacity>
+            </Card>
           </View>
         )}
 
         {paymentSummary && (
-          <View style={[styles.card, paymentSummary.isCovered ? styles.paymentOkCard : styles.paymentRiskCard]}>
+          <Card style={styles.sectionCard}>
             <View style={styles.cardHeaderRow}>
-              <Text style={styles.cardLabel}>{lang === 'ru' ? 'Payment Radar' : 'Payment Radar'}</Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Text style={paymentSummary.isCovered ? styles.paymentOkText : styles.paymentRiskText}>
-                  {paymentSummary.isCovered ? (lang === 'ru' ? 'Покрыто' : 'Covered') : (lang === 'ru' ? 'Риск' : 'Risk')}
-                </Text>
-                <TouchableOpacity style={styles.miniEditButton} onPress={() => setIsPaymentsModalVisible(true)}>
-                  <Text style={styles.miniEditButtonText}>{lang === 'ru' ? 'Настроить' : 'Manage'}</Text>
+              <View style={styles.cardTitleRow}>
+                <Ionicons name="radio-outline" size={16} color={colors.textSecondary} />
+                <Text style={styles.cardLabel}>Payment Radar</Text>
+              </View>
+              <View style={styles.headerActions}>
+                <StatusChip
+                  label={paymentSummary.isCovered ? (lang === 'ru' ? 'Покрыто' : 'Covered') : (lang === 'ru' ? 'Риск' : 'Risk')}
+                  tone={paymentSummary.isCovered ? 'success' : 'danger'}
+                  icon={paymentSummary.isCovered ? 'checkmark-circle' : 'alert-circle'}
+                />
+                <TouchableOpacity style={styles.ghostBtn} onPress={() => setIsPaymentsModalVisible(true)}>
+                  <Text style={styles.ghostBtnText}>{lang === 'ru' ? 'Настроить' : 'Manage'}</Text>
                 </TouchableOpacity>
               </View>
             </View>
-            <Text style={styles.paymentTitle}>
-              {paymentSummary.payments.length} {lang === 'ru' ? 'платежей за 31 день' : 'payments in 31 days'}
+            <Text style={styles.bigStat}>
+              {paymentSummary.payments.length}
+              <Text style={styles.bigStatUnit}> {lang === 'ru' ? 'платежей / 31 день' : 'payments / 31 days'}</Text>
             </Text>
-            <Text style={styles.paymentSub}>
+            <Text style={styles.mutedRow}>
               {lang === 'ru' ? 'Итого' : 'Total'} ≈ ${paymentSummary.totalDueUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
             </Text>
             {paymentSummary.deficits.slice(0, 2).map((deficit: any, index: number) => (
@@ -405,83 +440,106 @@ export default function HomeScreen() {
                   : `${deficit.owner_type}: missing ${deficit.missing} ${deficit.currency}`}
               </Text>
             ))}
-          </View>
+          </Card>
         )}
 
         {goal ? (
-          <View style={styles.card}>
+          <Card style={styles.sectionCard}>
             <View style={styles.cardHeaderRow}>
-              <Text style={styles.cardLabel}>{t('goalTitle', lang)}: {goal.title}</Text>
-              <TouchableOpacity onPress={openGoalModal} style={styles.miniEditButton}>
-                <Text style={styles.miniEditButtonText}>{lang === 'ru' ? '✏️ Изменить' : '✏️ Edit'}</Text>
+              <View style={styles.cardTitleRow}>
+                <Ionicons name="flag-outline" size={16} color={colors.textSecondary} />
+                <Text style={styles.cardLabel} numberOfLines={1}>{t('goalTitle', lang)}: {goal.title}</Text>
+              </View>
+              <TouchableOpacity onPress={openGoalModal} style={styles.iconBtn}>
+                <Ionicons name="pencil" size={15} color={colors.accent} />
               </TouchableOpacity>
             </View>
-            <Text style={styles.cardValue}>
-              {progress}% <Text style={styles.goalDetail}>(${assets.toLocaleString()} / ${goal.target_value?.toLocaleString()})</Text>
-            </Text>
-            <View style={styles.progressBarBg}>
-              <View style={[styles.progressBarFill, { width: `${Math.min(100, parseFloat(progress))}%` as any }]} />
+            <View style={styles.goalRow}>
+              <ProgressRing percent={parseFloat(progress)} />
+              <View style={styles.goalInfo}>
+                <Text style={styles.goalAmount}>${assets.toLocaleString()}</Text>
+                <Text style={styles.goalTarget}>
+                  {lang === 'ru' ? 'из' : 'of'} ${goal.target_value?.toLocaleString()}
+                </Text>
+                <Text style={styles.goalRemaining}>
+                  {lang === 'ru' ? 'осталось' : 'left'} ${Math.max(0, (goal.target_value || 0) - assets).toLocaleString()}
+                </Text>
+              </View>
             </View>
-          </View>
+          </Card>
         ) : (
-          <View style={styles.card}>
-            <View style={styles.cardHeaderRow}>
+          <Card style={styles.sectionCard}>
+            <View style={styles.cardTitleRow}>
+              <Ionicons name="flag-outline" size={16} color={colors.textSecondary} />
               <Text style={styles.cardLabel}>{t('savingGoal', lang)}</Text>
             </View>
-            <Text style={[styles.cardValue, { fontSize: 15, color: '#888', fontWeight: 'normal', marginBottom: 12 }]}>
-              {t('noActiveGoal', lang)}
-            </Text>
-            <TouchableOpacity 
-              style={[styles.button, { backgroundColor: '#1E1E1E', borderWidth: 1, borderColor: '#4CAF50', padding: 12 }]} 
-              onPress={openGoalModal}
-            >
-              <Text style={[styles.buttonText, { color: '#4CAF50' }]}>{t('setSavingGoal', lang)}</Text>
+            <Text style={styles.emptyHint}>{t('noActiveGoal', lang)}</Text>
+            <TouchableOpacity style={styles.outlineButton} onPress={openGoalModal}>
+              <Ionicons name="add-circle-outline" size={18} color={colors.accent} />
+              <Text style={styles.outlineButtonText}>{lang === 'ru' ? 'Установить цель' : 'Set goal'}</Text>
             </TouchableOpacity>
-          </View>
+          </Card>
         )}
 
         {warnings.length > 0 && (
-          <View style={[styles.card, styles.warningCard]}>
-            <Text style={styles.warningTitle}>
-              {warnings.length} {lang === 'ru' ? 'Предупреждений правил' : 'Rule Warnings'}
-            </Text>
+          <Card style={styles.warningCard}>
+            <View style={styles.cardTitleRow}>
+              <Ionicons name="warning-outline" size={16} color={colors.warning} />
+              <Text style={styles.warningTitle}>
+                {warnings.length} {lang === 'ru' ? 'предупреждений правил' : 'rule warnings'}
+              </Text>
+            </View>
             {warnings.map((w, i) => (
               <Text key={i} style={styles.warningText}>• {w.message}</Text>
             ))}
-          </View>
+          </Card>
         )}
 
-        <View style={[styles.card, { borderColor: '#4CAF50' }]}>
-          <View style={styles.cardHeaderRow}>
-            <Text style={[styles.cardLabel, { color: '#4CAF50', fontWeight: 'bold' }]}>{t('hackathonLogs', lang)}</Text>
-            <Text style={styles.buildBadge}>{getBuildInfoText()}</Text>
-          </View>
-          <Text style={{ fontSize: 13, color: '#AAA', fontWeight: 'normal', marginTop: 4, marginBottom: 12 }}>
-            {t('hackathonLogsDesc', lang)}
-          </Text>
-          <View style={{ flexDirection: 'row', gap: 10 }}>
-            <TouchableOpacity 
-              style={[styles.button, { flex: 1, backgroundColor: '#333', padding: 12 }]} 
-              onPress={handleShareLogs}
-            >
-              <Text style={[styles.buttonText, { fontSize: 14 }]}>{t('exportLogs', lang)}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.button, { backgroundColor: '#333', borderColor: '#D32F2F', borderWidth: 1, padding: 12 }]} 
-              onPress={handleClearLogs}
-            >
-              <Text style={[styles.buttonText, { fontSize: 14, color: '#D32F2F' }]}>{t('clear', lang)}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        {/* Primary action */}
+        <Pressable
+          onPress={() => navigation.navigate('Chat')}
+          style={({ pressed }) => [styles.ctaWrap, pressed && { opacity: 0.92 }]}
+        >
+          <LinearGradient
+            colors={gradients.hero}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.ctaButton}
+          >
+            <Ionicons name="sparkles" size={18} color="#FFF" />
+            <Text style={styles.ctaText}>{lang === 'ru' ? 'Спросить Muffin AI' : 'Ask Muffin AI'}</Text>
+          </LinearGradient>
+        </Pressable>
 
-        <View style={styles.buttonGrid}>
-          <TouchableOpacity style={styles.button} onPress={() => navigation.navigate('Chat')}>
-            <Text style={styles.buttonText}>{t('askMuffin', lang)}</Text>
+        {/* De-emphasized dev / hackathon logs (collapsed by default) */}
+        <View style={styles.devSection}>
+          <TouchableOpacity
+            style={styles.devHeader}
+            onPress={() => setShowDevLogs((v) => !v)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.cardTitleRow}>
+              <Ionicons name="terminal-outline" size={14} color={colors.textMuted} />
+              <Text style={styles.devHeaderText}>{t('hackathonLogs', lang)}</Text>
+            </View>
+            <Ionicons name={showDevLogs ? 'chevron-up' : 'chevron-down'} size={16} color={colors.textMuted} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.button} onPress={() => navigation.navigate('Accounts')}>
-            <Text style={styles.buttonText}>{t('viewAccounts', lang)}</Text>
-          </TouchableOpacity>
+          {showDevLogs && (
+            <View style={styles.devBody}>
+              <Text style={styles.devDesc}>{t('hackathonLogsDesc', lang)}</Text>
+              <Text style={styles.buildBadge}>{getBuildInfoText()}</Text>
+              <View style={styles.devButtonRow}>
+                <TouchableOpacity style={styles.devButton} onPress={handleShareLogs}>
+                  <Ionicons name="share-outline" size={15} color={colors.textSecondary} />
+                  <Text style={styles.devButtonText}>{lang === 'ru' ? 'Экспорт' : 'Export'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.devButton} onPress={handleClearLogs}>
+                  <Ionicons name="trash-outline" size={15} color={colors.danger} />
+                  <Text style={[styles.devButtonText, { color: colors.danger }]}>{t('clear', lang)}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
         </View>
       </ScrollView>
 
@@ -921,82 +979,200 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#121212' },
-  scrollContainer: { flex: 1, padding: 16 },
-  header: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    marginBottom: 24 
+  container: { flex: 1, backgroundColor: colors.bg },
+  scrollContainer: { flex: 1 },
+  scrollContent: { padding: spacing(4), paddingBottom: spacing(8) },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing(5),
   },
-  subtitle: { color: '#888', fontSize: 16 },
+  headerTitleWrap: { flexShrink: 1, paddingRight: spacing(2) },
+  greeting: { color: colors.textPrimary, fontSize: fontSize.xl, fontWeight: '800' },
+  subtitle: { color: colors.textSecondary, fontSize: fontSize.sm, marginTop: 2 },
   langToggleContainer: {
     flexDirection: 'row',
-    backgroundColor: '#1E1E1E',
-    borderRadius: 8,
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: colors.border,
     padding: 3,
   },
   langToggleBtn: {
     paddingVertical: 4,
     paddingHorizontal: 12,
-    borderRadius: 6,
+    borderRadius: radius.sm - 4,
   },
-  langToggleBtnActive: {
-    backgroundColor: '#4CAF50',
+  langToggleBtnActive: { backgroundColor: colors.accent },
+  langToggleText: { color: colors.textMuted, fontSize: fontSize.xs, fontWeight: '700' },
+  langToggleTextActive: { color: colors.white },
+
+  // Hero card
+  heroCard: {
+    borderRadius: radius.xl,
+    padding: spacing(6),
+    marginBottom: spacing(4),
+    ...shadow.floating,
   },
-  langToggleText: {
-    color: '#888',
-    fontSize: 12,
-    fontWeight: 'bold',
+  heroTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing(3),
   },
-  langToggleTextActive: {
-    color: '#FFF',
+  heroLabel: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    flexShrink: 1,
   },
-  card: { backgroundColor: '#1E1E1E', padding: 20, borderRadius: 16, marginBottom: 16, borderWidth: 1, borderColor: '#2E2E2E' },
-  cardLabel: { color: '#AAA', fontSize: 14 },
-  cardValue: { color: '#FFF', fontSize: 28, fontWeight: 'bold' },
-  cardHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  ratePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: radius.pill,
+  },
+  ratePillText: { color: '#FFF', fontSize: fontSize.xs, fontWeight: '700' },
+  heroValue: { color: '#FFF', fontSize: fontSize.display, fontWeight: '900', letterSpacing: -0.5 },
+  heroSub: { color: 'rgba(255,255,255,0.85)', fontSize: fontSize.xs, marginTop: 6 },
+
+  // Generic card pieces
+  sectionCard: { marginBottom: spacing(4) },
+  cardLabel: { color: colors.textSecondary, fontSize: fontSize.md, fontWeight: '600' },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing(3),
+  },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  ghostBtn: {
+    backgroundColor: colors.surfaceAlt,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: radius.sm,
+  },
+  ghostBtnText: { color: colors.textPrimary, fontSize: fontSize.xs, fontWeight: '600' },
+  iconBtn: {
+    backgroundColor: colors.accentSoft,
+    width: 30,
+    height: 30,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bigStat: { color: colors.textPrimary, fontSize: fontSize.xxl, fontWeight: '800' },
+  bigStatUnit: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '500' },
+  mutedRow: { color: colors.textSecondary, fontSize: fontSize.sm, marginTop: 4 },
   buildBadge: {
-    color: '#9CCC65',
+    color: colors.accent,
     fontSize: 10,
-    maxWidth: 190,
-    textAlign: 'right',
-    lineHeight: 14
+    lineHeight: 14,
+    marginTop: 6,
   },
-  splitGrid: { flexDirection: 'row', gap: 12, marginBottom: 16 },
-  splitCard: {
-    flex: 1,
-    backgroundColor: '#1E1E1E',
-    padding: 14,
-    borderRadius: 12,
+
+  // Split cards
+  splitGrid: { flexDirection: 'row', gap: spacing(3), marginBottom: spacing(4) },
+  splitCard: { flex: 1, padding: spacing(4) },
+  splitIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing(2),
+  },
+  splitLabel: { color: colors.textSecondary, fontSize: fontSize.xs, marginBottom: 4 },
+  splitValue: { color: colors.textPrimary, fontSize: fontSize.lg, fontWeight: '800' },
+  splitSub: { color: colors.accent, fontSize: fontSize.xs, marginTop: 4 },
+
+  paymentDeficit: { color: '#FFAB91', fontSize: fontSize.xs, marginTop: 6 },
+
+  // Goal
+  goalRow: { flexDirection: 'row', alignItems: 'center', gap: spacing(5) },
+  goalInfo: { flex: 1 },
+  goalAmount: { color: colors.textPrimary, fontSize: fontSize.xl, fontWeight: '800' },
+  goalTarget: { color: colors.textSecondary, fontSize: fontSize.sm, marginTop: 2 },
+  goalRemaining: { color: colors.accent, fontSize: fontSize.sm, fontWeight: '600', marginTop: 6 },
+  emptyHint: { color: colors.textMuted, fontSize: fontSize.sm, marginTop: spacing(2), marginBottom: spacing(3) },
+  outlineButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
     borderWidth: 1,
-    borderColor: '#2E2E2E'
+    borderColor: colors.accent,
+    borderRadius: radius.md,
+    paddingVertical: spacing(3),
   },
-  splitLabel: { color: '#888', fontSize: 12, marginBottom: 6 },
-  splitValue: { color: '#FFF', fontSize: 19, fontWeight: 'bold' },
-  splitSub: { color: '#9CCC65', fontSize: 11, marginTop: 4 },
-  paymentOkCard: { borderColor: '#2E7D32' },
-  paymentRiskCard: { borderColor: '#D32F2F', backgroundColor: '#2A1A1A' },
-  paymentOkText: { color: '#66BB6A', fontSize: 12, fontWeight: '700' },
-  paymentRiskText: { color: '#EF5350', fontSize: 12, fontWeight: '700' },
-  paymentTitle: { color: '#FFF', fontSize: 18, fontWeight: '700', marginBottom: 4 },
-  paymentSub: { color: '#AAA', fontSize: 13 },
-  paymentDeficit: { color: '#FFAB91', fontSize: 12, marginTop: 6 },
-  miniEditButton: { backgroundColor: '#333', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6 },
-  miniEditButtonText: { color: '#FFF', fontSize: 12, fontWeight: '500' },
-  goalDetail: { fontSize: 14, color: '#888', fontWeight: 'normal' },
-  progressBarBg: { height: 8, backgroundColor: '#333', borderRadius: 4, marginTop: 12 },
-  progressBarFill: { height: 8, backgroundColor: '#4CAF50', borderRadius: 4 },
-  warningCard: { backgroundColor: '#3b2818', borderColor: '#ff9800', borderWidth: 1 },
-  warningTitle: { color: '#ffb74d', fontSize: 16, fontWeight: 'bold', marginBottom: 8 },
-  warningText: { color: '#ffcc80', fontSize: 14, marginBottom: 4 },
-  buttonGrid: { gap: 12, marginTop: 8, marginBottom: 40 },
-  button: { backgroundColor: '#4CAF50', padding: 16, borderRadius: 12, alignItems: 'center' },
-  buttonText: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
-  ratesUpdateTime: { color: '#666', fontSize: 11, marginTop: 6, fontStyle: 'italic' },
-  
+  outlineButtonText: { color: colors.accent, fontSize: fontSize.md, fontWeight: '700' },
+
+  // Warnings
+  warningCard: { backgroundColor: 'rgba(245, 158, 11, 0.10)', borderColor: colors.warning, marginBottom: spacing(4) },
+  warningTitle: { color: colors.warning, fontSize: fontSize.md, fontWeight: '700' },
+  warningText: { color: '#FCD9A0', fontSize: fontSize.sm, marginTop: 6 },
+
+  // Primary CTA
+  ctaWrap: { marginBottom: spacing(5) },
+  ctaButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: spacing(4),
+    borderRadius: radius.md,
+    ...shadow.card,
+  },
+  ctaText: { color: '#FFF', fontSize: fontSize.md, fontWeight: '800' },
+
+  // De-emphasized dev / hackathon logs
+  devSection: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: 'rgba(255,255,255,0.02)',
+    overflow: 'hidden',
+  },
+  devHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing(3),
+    paddingHorizontal: spacing(4),
+  },
+  devHeaderText: { color: colors.textMuted, fontSize: fontSize.sm, fontWeight: '600' },
+  devBody: {
+    paddingHorizontal: spacing(4),
+    paddingBottom: spacing(4),
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingTop: spacing(3),
+  },
+  devDesc: { color: colors.textSecondary, fontSize: fontSize.xs, lineHeight: 17 },
+  devButtonRow: { flexDirection: 'row', gap: spacing(3), marginTop: spacing(3) },
+  devButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: colors.surfaceAlt,
+    borderRadius: radius.sm,
+    paddingVertical: spacing(3),
+  },
+  devButtonText: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600' },
+
+  // Mini buttons kept for modals
+  miniEditButton: { backgroundColor: colors.surfaceAlt, paddingVertical: 4, paddingHorizontal: 8, borderRadius: radius.sm },
+  miniEditButtonText: { color: colors.textPrimary, fontSize: fontSize.xs, fontWeight: '500' },
+  button: { backgroundColor: colors.accent, padding: 16, borderRadius: radius.md, alignItems: 'center' },
+  buttonText: { color: '#FFF', fontSize: fontSize.md, fontWeight: 'bold' },
+
   // Modal styles (identical to AccountsScreen)
   modalOverlay: {
     flex: 1,
