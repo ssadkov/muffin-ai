@@ -76,13 +76,18 @@ export async function initLocalModel(modelPath: string, modelType: 'qwen' | 'med
       const modelId = await loadModel({
         modelSrc: rawPath,
         modelType: "llamacpp-completion",
-        modelConfig: { ctx_size: 4096 }
+        // device/gpu_layers default to "gpu"/99 in the SDK (Metal on iOS), but we
+        // set them explicitly so the GPU offload intent is visible and stable.
+        // ctx_size raised to 8192: the financial context string grows with the
+        // number of accounts/payments/rates, and a larger window reduces the risk
+        // of context shifting (RuntimeStats.contextSlides) mid-conversation.
+        modelConfig: { ctx_size: 8192, gpu_layers: 99, device: "gpu" }
       });
       loadedModels[modelFilename] = modelId;
       const durationMs = Date.now() - startTime;
       console.log(`Local Edge Model ${modelFilename} loaded successfully! ID:`, modelId);
       
-      await addAuditLog({
+      addAuditLog({
         type: 'model_load',
         modelName: modelFilename,
         durationMs,
@@ -92,7 +97,7 @@ export async function initLocalModel(modelPath: string, modelType: 'qwen' | 'med
       const durationMs = Date.now() - startTime;
       console.error(`Failed to load local model ${modelFilename} via QVAC SDK`, e);
       
-      await addAuditLog({
+      addAuditLog({
         type: 'model_load',
         modelName: modelFilename,
         durationMs,
@@ -112,6 +117,14 @@ export async function askLocalQVAC(
   chatHistory?: { role: 'user' | 'assistant'; content: string }[],
   options?: {
     generationParams?: Record<string, unknown>;
+    /**
+     * Enable the SDK's on-disk KV cache. Pass `true` to auto-key on the
+     * conversation prefix, or a stable string key to reuse a session cache.
+     * On a cache hit the SDK only prefills the new turn, which cuts TTFT
+     * sharply on multi-turn chats. A miss falls back to a full prefill
+     * (i.e. current behavior), so this is always safe to enable.
+     */
+    kvCache?: boolean | string;
   }
 ): Promise<any> {
   const modelFilename = 'qwen2.5-3b-q4.gguf';
@@ -156,6 +169,7 @@ export async function askLocalQVAC(
       modelId,
       history: historyPayload,
       stream: true,
+      ...(options?.kvCache !== undefined ? { kvCache: options.kvCache } : {}),
       generationParams: {
         temp: 0.1, // low temperature to guarantee logical and mathematical accuracy
         top_p: 0.9,
@@ -187,11 +201,24 @@ export async function askLocalQVAC(
     const generationTimeMs = firstTokenTime ? (endTime - firstTokenTime) : 0;
     const tokensPerSec = generationTimeMs > 0 ? (tokenCount / (generationTimeMs / 1000)) : 0;
 
+    // Pull the engine's own stats: backendDevice tells us whether inference
+    // actually ran on GPU (Metal) or fell back to CPU; cacheTokens > 0 confirms
+    // a KV-cache hit. These are far more reliable than our manual wall-clock timing.
+    let backendDevice: string | undefined;
+    let cacheTokens: number | undefined;
+    try {
+      const final = await run.final;
+      backendDevice = final.stats?.backendDevice;
+      cacheTokens = final.stats?.cacheTokens;
+    } catch {
+      // stats are best-effort; ignore if unavailable
+    }
+
     console.log("Full response:", fullText);
-    console.log(`[Audit Stats] TTFT: ${ttftMs}ms, Tokens: ${tokenCount}, Speed: ${tokensPerSec.toFixed(2)} tok/sec`);
+    console.log(`[Audit Stats] TTFT: ${ttftMs}ms, Tokens: ${tokenCount}, Speed: ${tokensPerSec.toFixed(2)} tok/sec, Backend: ${backendDevice ?? 'unknown'}, CacheTokens: ${cacheTokens ?? 0}`);
 
     // Log inference event
-    await addAuditLog({
+    addAuditLog({
       type: 'inference',
       modelName: modelFilename,
       prompt: `${systemPrompt}\n\n${userPrompt}`,
@@ -208,7 +235,7 @@ export async function askLocalQVAC(
     console.error("QVAC completion error:", e?.message || e);
     
     // Log failed inference event
-    await addAuditLog({
+    addAuditLog({
       type: 'inference',
       modelName: modelFilename,
       prompt: `${systemPrompt}\n\n${userPrompt}`,

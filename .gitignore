@@ -31,7 +31,12 @@ yarn-error.*
 *.pem
 
 # local env files
+.env
 .env*.local
+
+# local artifacts / scratch
+inference_audit_log.json
+scratch/
 
 # typescript
 *.tsbuildinfo

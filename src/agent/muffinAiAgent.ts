@@ -615,7 +615,12 @@ Examples (REFERENCE ONLY - DO NOT COPY NUMBERS):
   const userPrompt = `${context}\n\nUSER QUESTION:\n${question}`;
   
   console.log(`Sending prompt to Edge AI (Model: ${modelType})...`);
-  return await askLocalQVAC(instructions, userPrompt, modelType, onChunk, chatHistory);
+  // Enable the on-disk KV cache so multi-turn chats reuse the prefilled prefix
+  // (system prompt + prior turns) instead of reprocessing it every message.
+  // A miss is harmless — it just falls back to a full prefill.
+  return await askLocalQVAC(instructions, userPrompt, modelType, onChunk, chatHistory, {
+    kvCache: true,
+  });
 }
 
 export async function continueMuffinAi(
@@ -636,5 +641,7 @@ export async function continueMuffinAi(
   const userPrompt = `${context}\n\nUSER QUESTION:\n${originalQuestion}\n\n${systemMessage}`;
   
   console.log(`Continuing prompt to Edge AI (Model: ${modelType})...`);
-  return await askLocalQVAC(instructions, userPrompt, modelType, onChunk, chatHistory);
+  return await askLocalQVAC(instructions, userPrompt, modelType, onChunk, chatHistory, {
+    kvCache: true,
+  });
 }
