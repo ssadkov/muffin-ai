@@ -9,10 +9,18 @@ import {
   KeyboardAvoidingView, 
   Platform, 
   ActivityIndicator, 
-  Keyboard, 
-  Alert, 
-  Image 
+  Keyboard,
+  Alert,
+  Image
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useHeaderHeight } from '@react-navigation/elements';
+import { colors, radius, spacing, fontSize, shadow } from '../theme/theme';
+import ProgressRing from '../components/ProgressRing';
+import StatusChip from '../components/StatusChip';
+import TypingDots from '../components/TypingDots';
+import ThinkingBox from '../components/ThinkingBox';
 import { askMuffinAi, continueMuffinAi } from '../agent/muffinAiAgent';
 import { downloadModelIfNeeded, initLocalModel, checkModelExists, isModelLoaded } from '../services/qvacService';
 import { recognizeImageText, parseBalanceFromOcrText } from '../services/ocrService';
@@ -45,6 +53,16 @@ interface Message {
   rawToolCallText?: string;
   isToolConfirmation?: boolean;
 }
+
+const TOOL_COUNTDOWN_SECONDS = 5;
+
+type ToolType = 'BTC_PRICE' | 'UPDATE_BALANCE' | 'UPDATE_GOAL';
+
+const TOOL_META: Record<ToolType, { icon: keyof typeof Ionicons.glyphMap; color: string; soft: string }> = {
+  BTC_PRICE: { icon: 'logo-bitcoin', color: '#F7931A', soft: 'rgba(247, 147, 26, 0.14)' },
+  UPDATE_BALANCE: { icon: 'wallet-outline', color: colors.accent, soft: colors.accentSoft },
+  UPDATE_GOAL: { icon: 'flag-outline', color: colors.info, soft: colors.infoSoft },
+};
 
 const parseModelResponse = (text: string) => {
   if (!text) return { thinking: null, response: '' };
@@ -98,6 +116,8 @@ export default function ChatScreen() {
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
 
   const isFocused = useIsFocused();
+  const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
   const [lang, setLang] = useState<Language>('ru');
   const [existingAccounts, setExistingAccounts] = useState<any[]>([]);
 
@@ -900,33 +920,58 @@ export default function ChatScreen() {
 
   const renderMessage = ({ item }: { item: Message }) => {
     if (item.isToolCall) {
+      const meta = TOOL_META[item.toolCallType as ToolType] ?? TOOL_META.UPDATE_BALANCE;
+      const statusChip =
+        item.toolCallStatus === 'completed'
+          ? { label: lang === 'ru' ? 'Готово' : 'Done', tone: 'success' as const, icon: 'checkmark-circle' as const }
+          : item.toolCallStatus === 'cancelled'
+            ? { label: lang === 'ru' ? 'Отменено' : 'Cancelled', tone: 'danger' as const, icon: 'close-circle' as const }
+            : item.toolCallStatus === 'running'
+              ? { label: lang === 'ru' ? 'Выполняется' : 'Running', tone: 'info' as const, icon: 'sync' as const }
+              : null;
       return (
         <View style={[styles.messageRow, { justifyContent: 'flex-start' }]}>
-          <View style={styles.toolCard}>
-            <Text style={styles.toolTitle}>
-              {item.toolCallType === 'BTC_PRICE' 
-                ? t('cryptoQuery', lang) 
-                : item.toolCallType === 'UPDATE_GOAL' 
-                  ? t('goalUpdate', lang) 
-                  : t('balanceAction', lang)}
-            </Text>
+          <View style={[styles.toolCard, { borderColor: meta.color }]}>
+            <View style={styles.toolHeaderRow}>
+              <View style={[styles.toolIconBadge, { backgroundColor: meta.soft }]}>
+                <Ionicons name={meta.icon} size={18} color={meta.color} />
+              </View>
+              <Text style={[styles.toolTitle, { color: meta.color }]}>
+                {item.toolCallType === 'BTC_PRICE'
+                  ? t('cryptoQuery', lang)
+                  : item.toolCallType === 'UPDATE_GOAL'
+                    ? t('goalUpdate', lang)
+                    : t('balanceAction', lang)}
+              </Text>
+              {statusChip && (
+                <View style={styles.toolHeaderChip}>
+                  <StatusChip label={statusChip.label} tone={statusChip.tone} icon={statusChip.icon} />
+                </View>
+              )}
+            </View>
             <Text style={styles.toolText}>{getToolDescription(item)}</Text>
-            
-            {item.toolCallStatus === 'pending' && (
-              <View style={styles.toolProgressContainer}>
-                {item.countdown !== undefined && (
-                  <Text style={styles.toolProgressText}>
-                    {t('executingInSeconds', lang, { seconds: item.countdown || 0 })}
+
+            {item.toolCallStatus === 'pending' && item.countdown !== undefined && (
+              <View style={styles.countdownRow}>
+                <ProgressRing
+                  percent={(item.countdown / TOOL_COUNTDOWN_SECONDS) * 100}
+                  size={44}
+                  strokeWidth={4}
+                  color={meta.color}
+                  label={String(item.countdown)}
+                />
+                <View style={styles.countdownInfo}>
+                  <Text style={styles.countdownLabel}>
+                    {lang === 'ru' ? 'Авто-выполнение' : 'Auto-run'}
                   </Text>
-                )}
-                {item.countdown !== undefined && (
-                  <TouchableOpacity 
-                    style={styles.toolCancelButton} 
+                  <TouchableOpacity
+                    style={styles.toolCancelButton}
                     onPress={() => cancelToolCall(item.id, messages[messages.length - 2]?.text || '', item.toolCallType || '')}
                   >
+                    <Ionicons name="close" size={13} color="#FFF" />
                     <Text style={styles.toolCancelText}>{t('cancel', lang)}</Text>
                   </TouchableOpacity>
-                )}
+                </View>
               </View>
             )}
 
@@ -1124,23 +1169,11 @@ export default function ChatScreen() {
 
             {item.toolCallStatus === 'running' && (
               <View style={styles.toolProgressContainer}>
-                <ActivityIndicator size="small" color="#4CAF50" />
+                <ActivityIndicator size="small" color={meta.color} />
                 <Text style={[styles.toolProgressText, { marginLeft: 8 }]}>
                   {t('runningAction', lang)}
                 </Text>
               </View>
-            )}
-
-            {item.toolCallStatus === 'completed' && (
-              <Text style={styles.toolStatusCompleted}>
-                {t('completedAction', lang)}
-              </Text>
-            )}
-
-            {item.toolCallStatus === 'cancelled' && (
-              <Text style={styles.toolStatusCancelled}>
-                {t('cancelledAction', lang)}
-              </Text>
             )}
           </View>
         </View>
@@ -1148,43 +1181,37 @@ export default function ChatScreen() {
     }
 
     const { thinking, response } = parseModelResponse(item.text);
+    const displayed = item.isUser ? response : getDisplayedText(item.text);
+    const showTyping = !item.isUser && !thinking && (!displayed || item.text === t('aiCalculating', lang));
 
     return (
       <View style={[styles.messageRow, { justifyContent: item.isUser ? 'flex-end' : 'flex-start' }]}>
+        {!item.isUser && (
+          <View style={styles.avatar}>
+            <Ionicons name="sparkles" size={15} color={colors.accent} />
+          </View>
+        )}
         <View style={[styles.messageBubble, item.isUser ? styles.userBubble : styles.aiBubble]}>
           {item.ocrData?.screenshotPath && (
-            <Image 
-              source={{ uri: item.ocrData.screenshotPath }} 
-              style={styles.messageImage} 
+            <Image
+              source={{ uri: item.ocrData.screenshotPath }}
+              style={styles.messageImage}
               resizeMode="cover"
             />
           )}
 
           {!item.isUser && thinking && (
-            <View style={[
-              styles.thinkingBox, 
-              { borderLeftColor: '#4CAF50' }
-            ]}>
-              <Text style={[
-                styles.thinkingTitle, 
-                { color: '#4CAF50' }
-              ]}>{t('aiThinking', lang)}</Text>
-              <Text style={styles.thinkingContent}>{thinking}</Text>
-            </View>
+            <ThinkingBox title={t('aiThinking', lang)} content={thinking} />
           )}
 
-          {response ? (
-            <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>
-              {item.isUser ? response : getDisplayedText(item.text)}
-            </Text>
+          {showTyping ? (
+            <TypingDots />
           ) : (
-            !item.isUser && !thinking && (
-              <Text style={[styles.messageText, styles.aiText, { fontStyle: 'italic', color: '#888' }]}>
-                {getDisplayedText(item.text)}
-              </Text>
-            )
+            <Text style={[styles.messageText, item.isUser ? styles.userText : styles.aiText]}>
+              {displayed}
+            </Text>
           )}
-          
+
           {item.isPendingOcrConfirm && item.ocrData && (
             <View style={styles.ocrEditContainer}>
               <Text style={styles.ocrSectionTitle}>{t('assignToAccount', lang)}</Text>
@@ -1262,10 +1289,10 @@ export default function ChatScreen() {
   };
 
   return (
-    <KeyboardAvoidingView 
-      style={styles.container} 
+    <KeyboardAvoidingView
+      style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={100}
+      keyboardVerticalOffset={headerHeight}
     >
       {!isModelReady && (
         <View style={styles.downloadContainer}>
@@ -1298,247 +1325,209 @@ export default function ChatScreen() {
           </Text>
         </View>
       )}
-      <View style={styles.inputContainer}>
+      <View style={[styles.inputContainer, { paddingBottom: Math.max(insets.bottom, spacing(2)) }]}>
         <TouchableOpacity style={styles.attachButton} onPress={handleAttachPress} disabled={!isModelReady || isLoading || isWhisperDownloading || isWhisperInitializing}>
-          <Text style={styles.attachIcon}>📎</Text>
+          <Ionicons name="add" size={22} color={colors.textSecondary} />
         </TouchableOpacity>
 
         <TextInput
           style={styles.input}
           placeholder={isRecording ? t('listeningPlaceholder', lang) : t('askMuffinPlaceholder', lang)}
-          placeholderTextColor="#888"
+          placeholderTextColor={colors.textMuted}
           value={inputText}
           onChangeText={setInputText}
           onSubmitEditing={sendMessage}
           returnKeyType="send"
           editable={!isRecording && !isLoading && !isWhisperDownloading && !isWhisperInitializing}
         />
-        <TouchableOpacity style={[styles.sendButton, (!inputText.trim() || isLoading || isRecording) && styles.sendButtonDisabled]} onPress={sendMessage} disabled={isLoading || !inputText.trim() || isRecording}>
-          {isLoading ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.sendIcon}>↑</Text>}
-        </TouchableOpacity>
-        
-        <TouchableOpacity 
-          style={[styles.attachButton, isRecording && { backgroundColor: '#D32F2F' }]} 
-          onPress={handleMicPress} 
+
+        <TouchableOpacity
+          style={[styles.micButton, isRecording && styles.micButtonActive]}
+          onPress={handleMicPress}
           disabled={!isModelReady || isLoading || isWhisperDownloading || isWhisperInitializing}
         >
-          <Text style={styles.attachIcon}>{isRecording ? '🛑' : '🎙️'}</Text>
+          <Ionicons name={isRecording ? 'stop' : 'mic'} size={20} color={isRecording ? '#FFF' : colors.textSecondary} />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={[styles.sendButton, (!inputText.trim() || isLoading || isRecording) && styles.sendButtonDisabled]} onPress={sendMessage} disabled={isLoading || !inputText.trim() || isRecording}>
+          {isLoading ? <ActivityIndicator color="#fff" size="small" /> : <Ionicons name="arrow-up" size={20} color="#FFF" />}
         </TouchableOpacity>
       </View>
-      <View style={styles.bottomSafeArea} />
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#121212' },
-  messageRow: { width: '100%', flexDirection: 'row' },
-  messageBubble: { maxWidth: '80%', padding: 12, borderRadius: 16 },
-  userBubble: { backgroundColor: '#4CAF50', borderBottomRightRadius: 4 },
-  aiBubble: { backgroundColor: '#333', borderBottomLeftRadius: 4 },
-  messageText: { fontSize: 16, lineHeight: 22 },
+  container: { flex: 1, backgroundColor: colors.bg },
+  messageRow: { width: '100%', flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
+  avatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.accentSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 2,
+  },
+  messageBubble: { maxWidth: '80%', paddingHorizontal: spacing(3), paddingVertical: spacing(2.5), borderRadius: radius.lg },
+  userBubble: { backgroundColor: colors.accent, borderBottomRightRadius: 4 },
+  aiBubble: { backgroundColor: colors.surface, borderBottomLeftRadius: 4, borderWidth: 1, borderColor: colors.border },
+  messageText: { fontSize: fontSize.md, lineHeight: 22 },
   userText: { color: '#FFF' },
-  aiText: { color: '#FFF' },
-  inputContainer: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#1E1E1E', gap: 8, alignItems: 'center' },
-  input: { flex: 1, backgroundColor: '#333', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, color: '#FFF', fontSize: 16, minHeight: 40, maxHeight: 100 },
-  sendButton: { backgroundColor: '#4CAF50', width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
-  sendButtonDisabled: { backgroundColor: '#555' },
-  sendIcon: { color: '#FFF', fontSize: 20, fontWeight: 'bold' },
-  downloadContainer: { padding: 16, alignItems: 'center', backgroundColor: '#333', margin: 16, borderRadius: 12 },
-  downloadText: { color: '#4CAF50', marginTop: 8, textAlign: 'center' },
-  bottomSafeArea: { height: Platform.OS === 'ios' ? 20 : 0, backgroundColor: '#1E1E1E' },
+  aiText: { color: colors.textPrimary },
+  inputContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: spacing(3),
+    paddingTop: spacing(2),
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    gap: spacing(2),
+    alignItems: 'center',
+  },
+  input: {
+    flex: 1,
+    backgroundColor: colors.surfaceInput,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing(4),
+    paddingVertical: spacing(2.5),
+    color: colors.textPrimary,
+    fontSize: fontSize.md,
+    minHeight: 40,
+    maxHeight: 100,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
   attachButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#333',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.surfaceInput,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  attachIcon: {
-    color: '#FFF',
-    fontSize: 20,
+  micButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.surfaceInput,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
+  micButtonActive: { backgroundColor: colors.danger },
+  sendButton: {
+    backgroundColor: colors.accent,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sendButtonDisabled: { backgroundColor: colors.borderStrong },
+  downloadContainer: {
+    padding: spacing(4),
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    margin: spacing(4),
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  downloadText: { color: colors.accent, marginTop: 8, textAlign: 'center' },
   messageImage: {
     width: 200,
     height: 150,
-    borderRadius: 8,
+    borderRadius: radius.sm,
     marginBottom: 8,
   },
-  confirmButtonsContainer: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 10,
-  },
+  confirmButtonsContainer: { flexDirection: 'row', gap: spacing(2), marginTop: spacing(3) },
   confirmButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    flex: 1,
-    alignItems: 'center',
-  },
-  yesButton: {
-    backgroundColor: '#4CAF50',
-  },
-  noButton: {
-    backgroundColor: '#D32F2F',
-  },
-  confirmButtonText: {
-    color: '#FFF',
-    fontWeight: 'bold',
-    fontSize: 14,
-  },
-
-  // Tool Call card styles
-  toolCard: {
-    backgroundColor: '#1E1E1E',
-    borderWidth: 1.5,
-    borderColor: '#4CAF50',
-    borderRadius: 12,
-    padding: 14,
-    marginVertical: 4,
-    width: 250,
-  },
-  toolTitle: {
-    color: '#4CAF50',
-    fontSize: 12,
-    fontWeight: 'bold',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginBottom: 6,
-  },
-  toolText: {
-    color: '#FFF',
-    fontSize: 14,
-    lineHeight: 20,
-    marginBottom: 10,
-  },
-  toolProgressContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  toolProgressText: {
-    color: '#AAA',
-    fontSize: 12,
-    fontStyle: 'italic',
-  },
-  toolCancelButton: {
-    backgroundColor: '#D32F2F',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 6,
-  },
-  toolCancelText: {
-    color: '#FFF',
-    fontSize: 11,
-    fontWeight: 'bold',
-  },
-  toolStatusCompleted: {
-    color: '#888',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  toolStatusCancelled: {
-    color: '#D32F2F',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  modelToggleHeader: {
-    flexDirection: 'row',
-    backgroundColor: '#1E1E1E',
-    borderBottomWidth: 1,
-    borderBottomColor: '#333',
-    padding: 6
-  },
-  toggleTab: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-    borderRadius: 8,
-    marginHorizontal: 4,
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent'
-  },
-  activeTab: {
-    backgroundColor: '#2A2A2A',
-  },
-  tabText: {
-    color: '#888',
-    fontSize: 14,
-    fontWeight: '600'
-  },
-  activeTabText: {
-    color: '#FFF'
-  },
-  thinkingBox: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderLeftWidth: 2.5,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 6,
-    marginBottom: 8,
-  },
-  thinkingTitle: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  thinkingContent: {
-    color: '#AAA',
-    fontSize: 13,
-    fontStyle: 'italic',
-    lineHeight: 18,
-  },
-  ocrEditContainer: {
-    marginTop: 8,
-    width: '100%',
-  },
-  ocrSectionTitle: {
-    color: '#AAA',
-    fontSize: 12,
-    fontWeight: 'bold',
-    marginTop: 8,
-    marginBottom: 4,
-  },
-  chipsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 6,
-    marginVertical: 4,
+    paddingVertical: spacing(2.5),
+    paddingHorizontal: spacing(4),
+    borderRadius: radius.sm,
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  chip: {
-    backgroundColor: '#444',
+  yesButton: { backgroundColor: colors.accent },
+  noButton: { backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.borderStrong },
+  confirmButtonText: { color: '#FFF', fontWeight: '700', fontSize: fontSize.sm },
+
+  // Tool Call card
+  toolCard: {
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderRadius: radius.md,
+    padding: spacing(4),
+    marginVertical: 4,
+    width: 280,
+    ...shadow.card,
+  },
+  toolHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: spacing(2) },
+  toolIconBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toolHeaderChip: { marginLeft: 'auto' },
+  toolTitle: {
+    fontSize: fontSize.xs,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    flexShrink: 1,
+  },
+  toolText: { color: colors.textPrimary, fontSize: fontSize.sm, lineHeight: 20, marginBottom: spacing(2) },
+  countdownRow: { flexDirection: 'row', alignItems: 'center', gap: spacing(3), marginTop: spacing(1) },
+  countdownInfo: { flex: 1, gap: 6 },
+  countdownLabel: { color: colors.textSecondary, fontSize: fontSize.xs },
+  toolProgressContainer: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  toolProgressText: { color: colors.textSecondary, fontSize: fontSize.xs, fontStyle: 'italic' },
+  toolCancelButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-start',
+    backgroundColor: colors.dangerSoft,
     paddingVertical: 5,
     paddingHorizontal: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#555',
+    borderRadius: radius.sm,
   },
-  chipActive: {
-    backgroundColor: '#4CAF50',
-    borderColor: '#4CAF50',
+  toolCancelText: { color: colors.danger, fontSize: fontSize.xs, fontWeight: '700' },
+
+  ocrEditContainer: { marginTop: spacing(2), width: '100%' },
+  ocrSectionTitle: {
+    color: colors.textSecondary,
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    marginTop: spacing(2),
+    marginBottom: 4,
   },
-  chipText: {
-    color: '#CCC',
-    fontSize: 11,
-  },
-  chipTextActive: {
-    color: '#FFF',
-    fontWeight: 'bold',
-  },
-  ocrTextInput: {
-    backgroundColor: '#222',
-    color: '#FFF',
-    borderRadius: 8,
-    paddingHorizontal: 10,
+  chipsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginVertical: 4 },
+  chip: {
+    backgroundColor: colors.surfaceAlt,
     paddingVertical: 6,
-    fontSize: 14,
+    paddingHorizontal: 12,
+    borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: '#444',
+    borderColor: colors.border,
+  },
+  chipActive: { backgroundColor: colors.accentSoft, borderColor: colors.accent },
+  chipText: { color: colors.textSecondary, fontSize: fontSize.xs },
+  chipTextActive: { color: colors.accent, fontWeight: '700' },
+  ocrTextInput: {
+    backgroundColor: colors.surfaceInput,
+    color: colors.textPrimary,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing(3),
+    paddingVertical: spacing(2),
+    fontSize: fontSize.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
     marginVertical: 4,
   },
 });
