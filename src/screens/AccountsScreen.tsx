@@ -17,8 +17,12 @@ import {
   ActivityIndicator,
   Switch
 } from 'react-native';
-import { 
-  getLatestBalances, 
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import { colors, gradients, radius, spacing, fontSize, shadow } from '../theme/theme';
+import StatusChip from '../components/StatusChip';
+import {
+  getLatestBalances,
   updateAccountAddress, 
   createWalletAccount, 
   getAccountHistory,
@@ -34,6 +38,14 @@ import { testBybitConnection } from '../services/bybitService';
 import { syncPublicWallets } from '../services/walletSyncService';
 import { useIsFocused } from '@react-navigation/native';
 import { t, Language } from '../localization/localization';
+
+function getAccountVisual(item: any): { icon: keyof typeof Ionicons.glyphMap; color: string; soft: string } {
+  const isCryptoWallet = item.source?.endsWith('_wallet') || item.type === 'crypto_wallet';
+  const isExchange = item.source?.endsWith('_api') || item.type === 'exchange';
+  if (isExchange) return { icon: 'trending-up', color: colors.info, soft: colors.infoSoft };
+  if (isCryptoWallet) return { icon: 'wallet', color: colors.accent, soft: colors.accentSoft };
+  return { icon: 'card', color: colors.textSecondary, soft: colors.surfaceAlt };
+}
 
 export default function AccountsScreen() {
   const isFocused = useIsFocused();
@@ -256,21 +268,28 @@ export default function AccountsScreen() {
     const ownerType = item.owner_type || 'personal';
     const ownershipPercent = Number(item.ownership_percent || 100);
 
+    const visual = getAccountVisual(item);
+
     return (
-      <TouchableOpacity 
-        style={[styles.card, ownerType === 'company' && styles.companyCard]} 
+      <TouchableOpacity
+        style={[styles.card, ownerType === 'company' && styles.companyCard]}
         onPress={() => openHistoryModal(item)}
         activeOpacity={0.7}
       >
         <View style={styles.cardHeader}>
-          <View style={{ flex: 1, paddingRight: 8 }}>
-            <Text style={styles.name}>{item.name}</Text>
+          <View style={[styles.accountIcon, { backgroundColor: visual.soft }]}>
+            <Ionicons name={visual.icon} size={20} color={visual.color} />
+          </View>
+          <View style={{ flex: 1, paddingHorizontal: spacing(2) }}>
+            <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
             <View style={styles.metaRow}>
-              <Text style={[styles.ownerBadge, ownerType === 'company' && styles.companyBadge]}>
-                {ownerType === 'company' ? 'Company' : 'Personal'}
-              </Text>
+              <StatusChip
+                label={ownerType === 'company' ? 'Company' : 'Personal'}
+                tone={ownerType === 'company' ? 'info' : 'neutral'}
+                icon={ownerType === 'company' ? 'business' : 'person'}
+              />
               {ownerType === 'company' && (
-                <Text style={styles.shareBadge}>{ownershipPercent}% share</Text>
+                <StatusChip label={`${ownershipPercent}%`} tone="success" icon="pie-chart" />
               )}
             </View>
           </View>
@@ -285,19 +304,16 @@ export default function AccountsScreen() {
         {item.model_note ? (
           <Text style={styles.modelNote}>{item.model_note}</Text>
         ) : null}
-        
+
         {isCryptoWallet && (
           <View style={styles.addressContainer}>
-            <Text style={styles.addressLabel}>{lang === 'ru' ? 'Адрес кошелька:' : 'Wallet Address:'}</Text>
+            <Text style={styles.addressLabel}>{lang === 'ru' ? 'Адрес кошелька' : 'Wallet Address'}</Text>
             <View style={styles.addressRow}>
               <Text style={styles.addressText} numberOfLines={1} ellipsizeMode="middle">
                 {item.address || (lang === 'ru' ? 'Не настроен' : 'Not Configured')}
               </Text>
-              <TouchableOpacity 
-                style={styles.editButton} 
-                onPress={() => openEditModal(item)}
-              >
-                <Text style={styles.editButtonText}>{lang === 'ru' ? '✏️ Изменить' : '✏️ Edit'}</Text>
+              <TouchableOpacity style={styles.iconButton} onPress={() => openEditModal(item)}>
+                <Ionicons name="pencil" size={15} color={colors.accent} />
               </TouchableOpacity>
             </View>
           </View>
@@ -305,28 +321,28 @@ export default function AccountsScreen() {
 
         {isExchange && (
           <View style={styles.addressContainer}>
-            <Text style={styles.addressLabel}>{lang === 'ru' ? 'API интеграция:' : 'API Integration:'}</Text>
+            <Text style={styles.addressLabel}>{lang === 'ru' ? 'API интеграция' : 'API Integration'}</Text>
             <View style={styles.addressRow}>
               <Text style={styles.addressText} numberOfLines={1}>
                 {item.source === 'bybit_api' ? t('bybitApiLabel', lang) : t('exchangeApi', lang)}
               </Text>
               <View style={{ flexDirection: 'row', gap: 6 }}>
-                <TouchableOpacity 
-                  style={[styles.editButton, { backgroundColor: '#4CAF50' }]} 
+                <TouchableOpacity
+                  style={[styles.iconButton, { backgroundColor: colors.accentSoft }]}
                   onPress={() => handleSyncSingleExchange(item.id)}
                   disabled={syncingAccountId === item.id}
                 >
                   {syncingAccountId === item.id ? (
-                    <ActivityIndicator size="small" color="#fff" />
+                    <ActivityIndicator size="small" color={colors.accent} />
                   ) : (
-                    <Text style={styles.editButtonText}>{lang === 'ru' ? '🔄 Синхр.' : '🔄 Sync'}</Text>
+                    <Ionicons name="sync" size={15} color={colors.accent} />
                   )}
                 </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.editButton, { backgroundColor: '#d32f2f' }]} 
+                <TouchableOpacity
+                  style={[styles.iconButton, { backgroundColor: colors.dangerSoft }]}
                   onPress={() => handleDeleteExchange(item.id, item.name)}
                 >
-                  <Text style={styles.editButtonText}>{t('deleteButton', lang)}</Text>
+                  <Ionicons name="trash" size={15} color={colors.danger} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -334,15 +350,15 @@ export default function AccountsScreen() {
         )}
 
         <View style={styles.cardFooter}>
-          <Text style={styles.source}>{item.source}</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View style={styles.footerLeft}>
+            <Ionicons name="time-outline" size={12} color={colors.textMuted} />
             <Text style={styles.date}>{item.created_at ? new Date(item.created_at).toLocaleDateString() : 'N/A'}</Text>
-            <TouchableOpacity style={styles.inlineEditButton} onPress={() => openEditModal(item)}>
-              <Text style={styles.inlineEditText}>{lang === 'ru' ? 'Настроить' : 'Configure'}</Text>
-            </TouchableOpacity>
           </View>
+          <TouchableOpacity style={styles.inlineEditButton} onPress={() => openEditModal(item)}>
+            <Ionicons name="settings-outline" size={13} color={colors.accent} />
+            <Text style={styles.inlineEditText}>{lang === 'ru' ? 'Настроить' : 'Configure'}</Text>
+          </TouchableOpacity>
         </View>
-        <Text style={styles.tapTip}>{t('tapToViewHistory', lang)}</Text>
       </TouchableOpacity>
     );
   };
@@ -388,47 +404,59 @@ export default function AccountsScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Header Add Buttons */}
-      <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
-        <TouchableOpacity 
-          style={[styles.addButton, { flex: 1, marginBottom: 0 }]} 
-          onPress={() => setIsAddModalVisible(true)}
-        >
-          <Text style={styles.addButtonText}>{t('addWallet', lang)}</Text>
+      {/* Gradient summary */}
+      <LinearGradient
+        colors={gradients.hero}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.summaryCard}
+      >
+        <View style={styles.summaryTopRow}>
+          <Text style={styles.summaryTotalLabel}>{lang === 'ru' ? 'Все счета' : 'All accounts'}</Text>
+          {isSyncingAll ? (
+            <ActivityIndicator size="small" color="#FFF" />
+          ) : (
+            <TouchableOpacity style={styles.syncPill} onPress={handleSyncAll}>
+              <Ionicons name="sync" size={13} color="#FFF" />
+              <Text style={styles.syncPillText}>{lang === 'ru' ? 'Синхр.' : 'Sync'}</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        <Text style={styles.summaryTotal}>
+          ${(personalUsd + companyUsd).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+        </Text>
+        <View style={styles.summarySplitRow}>
+          <View style={styles.summarySplitItem}>
+            <Text style={styles.summarySplitLabel}>{lang === 'ru' ? 'Личные' : 'Personal'}</Text>
+            <Text style={styles.summarySplitValue}>${personalUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Text>
+          </View>
+          <View style={styles.summaryDivider} />
+          <View style={styles.summarySplitItem}>
+            <Text style={styles.summarySplitLabel}>{lang === 'ru' ? 'Компания' : 'Company'}</Text>
+            <Text style={styles.summarySplitValue}>${companyUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Text>
+            <Text style={styles.summarySplitSub}>
+              {lang === 'ru' ? 'доля' : 'share'} ${companyOwnedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </Text>
+          </View>
+        </View>
+      </LinearGradient>
+
+      {/* Add actions */}
+      <View style={styles.actionRow}>
+        <TouchableOpacity style={styles.actionButton} onPress={() => setIsAddModalVisible(true)}>
+          <Ionicons name="wallet-outline" size={18} color={colors.accent} />
+          <Text style={styles.actionButtonText}>{lang === 'ru' ? 'Добавить кошелёк' : 'Add wallet'}</Text>
         </TouchableOpacity>
-        <TouchableOpacity 
-          style={[styles.addButton, { flex: 1, marginBottom: 0, borderColor: '#2196F3' }]} 
+        <TouchableOpacity
+          style={[styles.actionButton, { borderColor: colors.info }]}
           onPress={() => setIsConnectModalVisible(true)}
         >
-          <Text style={[styles.addButtonText, { color: '#2196F3' }]}>{t('connectBybit', lang)}</Text>
+          <Ionicons name="link-outline" size={18} color={colors.info} />
+          <Text style={[styles.actionButtonText, { color: colors.info }]}>{lang === 'ru' ? 'Подключить Bybit' : 'Connect Bybit'}</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Sync All Button */}
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <Text style={{ color: '#888', fontSize: 13 }}>{t('connectedAccounts', lang)}</Text>
-        {isSyncingAll ? (
-          <ActivityIndicator size="small" color="#4CAF50" />
-        ) : (
-          <TouchableOpacity onPress={handleSyncAll}>
-            <Text style={{ color: '#4CAF50', fontSize: 13, fontWeight: 'bold' }}>{t('syncAll', lang)}</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      <View style={styles.summaryCard}>
-        <View>
-          <Text style={styles.summaryLabel}>{lang === 'ru' ? 'Личные' : 'Personal'}</Text>
-          <Text style={styles.summaryValue}>${personalUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Text>
-        </View>
-        <View style={{ alignItems: 'flex-end' }}>
-          <Text style={styles.summaryLabel}>{lang === 'ru' ? 'Компания' : 'Company'}</Text>
-          <Text style={styles.summaryValue}>${companyUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Text>
-          <Text style={styles.summarySub}>
-            {lang === 'ru' ? 'доля' : 'share'} ${companyOwnedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-          </Text>
-        </View>
-      </View>
+      <Text style={styles.listHeading}>{t('connectedAccounts', lang)}</Text>
 
       <SectionList
         sections={accountSections}
@@ -717,7 +745,7 @@ export default function AccountsScreen() {
                     {historyAccount?.name} {lang === 'ru' ? 'История балансов' : 'Balance History'}
                   </Text>
                   <TouchableOpacity onPress={() => setIsHistoryVisible(false)} style={{ padding: 4 }}>
-                    <Text style={{ color: '#888', fontSize: 18, fontWeight: 'bold' }}>✕</Text>
+                    <Ionicons name="close" size={20} color={colors.textMuted} />
                   </TouchableOpacity>
                 </View>
                 
@@ -749,322 +777,205 @@ export default function AccountsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, backgroundColor: '#121212' },
-  addButton: {
-    backgroundColor: '#1E1E1E',
-    borderWidth: 1,
-    borderColor: '#4CAF50',
-    borderRadius: 12,
-    padding: 14,
-    alignItems: 'center',
-    marginBottom: 16
+  container: { flex: 1, padding: spacing(4), backgroundColor: colors.bg },
+
+  // Gradient summary
+  summaryCard: {
+    borderRadius: radius.xl,
+    padding: spacing(5),
+    marginBottom: spacing(4),
+    ...shadow.floating,
   },
-  addButtonText: {
-    color: '#4CAF50',
-    fontSize: 15,
-    fontWeight: 'bold'
-  },
-  card: { backgroundColor: '#1E1E1E', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#2E2E2E' },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
-  name: { color: '#FFF', fontSize: 16, fontWeight: '600' },
-  value: { color: '#4CAF50', fontSize: 16, fontWeight: 'bold' },
-  cardFooter: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 },
-  source: { color: '#888', fontSize: 12 },
-  date: { color: '#888', fontSize: 12 },
-  tapTip: {
-    color: '#555',
-    fontSize: 11,
-    textAlign: 'center',
-    marginTop: 8,
-    fontStyle: 'italic'
-  },
-  
-  addressContainer: {
-    backgroundColor: '#151515',
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#252525',
-    marginVertical: 4
-  },
-  addressLabel: {
-    color: '#888',
-    fontSize: 11,
-    marginBottom: 4,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5
-  },
-  addressRow: {
+  summaryTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  summaryTotalLabel: { color: 'rgba(255,255,255,0.9)', fontSize: fontSize.sm, fontWeight: '600' },
+  syncPill: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 8
+    gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: radius.pill,
   },
-  addressText: {
-    color: '#CCC',
-    fontSize: 13,
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    flex: 1
+  syncPillText: { color: '#FFF', fontSize: fontSize.xs, fontWeight: '700' },
+  summaryTotal: { color: '#FFF', fontSize: fontSize.display, fontWeight: '900', letterSpacing: -0.5, marginTop: spacing(2) },
+  summarySplitRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing(3) },
+  summarySplitItem: { flex: 1 },
+  summaryDivider: { width: 1, alignSelf: 'stretch', backgroundColor: 'rgba(255,255,255,0.25)', marginHorizontal: spacing(3) },
+  summarySplitLabel: { color: 'rgba(255,255,255,0.85)', fontSize: fontSize.xs },
+  summarySplitValue: { color: '#FFF', fontSize: fontSize.lg, fontWeight: '800', marginTop: 2 },
+  summarySplitSub: { color: 'rgba(255,255,255,0.85)', fontSize: fontSize.xs, marginTop: 2 },
+
+  // Add actions
+  actionRow: { flexDirection: 'row', gap: spacing(3), marginBottom: spacing(4) },
+  actionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.accent,
+    borderRadius: radius.md,
+    paddingVertical: spacing(3),
   },
-  editButton: {
-    backgroundColor: '#333',
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 6
-  },
-  editButtonText: {
-    color: '#FFF',
-    fontSize: 12,
-    fontWeight: '500'
-  },
-  inlineEditButton: {
-    backgroundColor: '#2A2A2A',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4
-  },
-  inlineEditText: {
-    color: '#9CCC65',
-    fontSize: 11,
-    fontWeight: '700'
+  actionButtonText: { color: colors.accent, fontSize: fontSize.sm, fontWeight: '700' },
+  listHeading: {
+    color: colors.textSecondary,
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: spacing(2),
   },
 
-  modalOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0, 0, 0, 0.75)'
-  },
-  modalContent: {
-    backgroundColor: '#1E1E1E',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 24,
-    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
-    borderWidth: 1,
-    borderColor: '#333'
-  },
-  modalTitle: {
-    color: '#FFF',
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 16
-  },
-  inputLabel: {
-    color: '#AAA',
-    fontSize: 13,
-    fontWeight: '600',
-    marginBottom: 6
-  },
-  modalInput: {
-    backgroundColor: '#2A2A2A',
-    borderRadius: 8,
-    padding: 12,
-    color: '#FFF',
-    fontSize: 14,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#444'
-  },
-  multilineInput: {
-    minHeight: 78,
-    textAlignVertical: 'top'
-  },
-  segmentedRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 16
-  },
-  segmentButton: {
-    flex: 1,
-    backgroundColor: '#2A2A2A',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#444',
-    paddingVertical: 10,
-    alignItems: 'center'
-  },
-  segmentButtonActive: {
-    borderColor: '#4CAF50',
-    backgroundColor: 'rgba(76, 175, 80, 0.12)'
-  },
-  segmentButtonText: {
-    color: '#AAA',
-    fontSize: 12,
-    fontWeight: '700'
-  },
-  segmentButtonTextActive: {
-    color: '#4CAF50'
-  },
-  networkSelector: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 16
-  },
-  networkButton: {
-    flex: 1,
-    backgroundColor: '#2A2A2A',
-    paddingVertical: 10,
-    borderRadius: 8,
+  // Account card
+  card: { backgroundColor: colors.surface, padding: spacing(4), borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, ...shadow.card },
+  companyCard: { borderColor: colors.info },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing(3) },
+  accountIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.md,
     alignItems: 'center',
+    justifyContent: 'center',
+  },
+  name: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: '700' },
+  value: { color: colors.accent, fontSize: fontSize.lg, fontWeight: '800' },
+  ownedValue: { color: colors.accent, fontSize: fontSize.xs, marginTop: 3 },
+  metaRow: { flexDirection: 'row', gap: 6, marginTop: 6, flexWrap: 'wrap' },
+  modelNote: { color: colors.textSecondary, fontSize: fontSize.xs, lineHeight: 17, marginBottom: spacing(2.5) },
+  cardFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing(3) },
+  footerLeft: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  date: { color: colors.textMuted, fontSize: fontSize.xs },
+
+  addressContainer: {
+    backgroundColor: colors.bg,
+    padding: spacing(2.5),
+    borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: '#444'
+    borderColor: colors.border,
+    marginVertical: 4,
   },
-  networkButtonActive: {
-    borderColor: '#4CAF50',
-    backgroundColor: 'rgba(76, 175, 80, 0.1)'
+  addressLabel: {
+    color: colors.textMuted,
+    fontSize: 10,
+    marginBottom: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
-  networkButtonText: {
-    color: '#AAA',
-    fontSize: 12,
-    fontWeight: '600'
-  },
-  networkButtonTextActive: {
-    color: '#4CAF50'
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 8
-  },
-  modalButton: {
+  addressRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  addressText: {
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center'
   },
-  cancelButton: {
-    backgroundColor: '#333'
+  iconButton: {
+    backgroundColor: colors.accentSoft,
+    width: 30,
+    height: 30,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  saveButton: {
-    backgroundColor: '#4CAF50'
-  },
-  buttonText: {
-    color: '#FFF',
-    fontWeight: 'bold',
-    fontSize: 15
-  },
-  summaryCard: {
-    backgroundColor: '#181818',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#2E2E2E',
-    padding: 14,
-    marginBottom: 14,
+  inlineEditButton: {
     flexDirection: 'row',
-    justifyContent: 'space-between'
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: colors.accentSoft,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing(2.5),
+    paddingVertical: 5,
   },
-  summaryLabel: {
-    color: '#888',
-    fontSize: 12,
-    marginBottom: 4
-  },
-  summaryValue: {
-    color: '#FFF',
-    fontSize: 18,
-    fontWeight: 'bold'
-  },
-  summarySub: {
-    color: '#9CCC65',
-    fontSize: 12,
-    marginTop: 2
-  },
+  inlineEditText: { color: colors.accent, fontSize: fontSize.xs, fontWeight: '700' },
+
+  // Section headers
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingTop: 6,
-    paddingBottom: 2
+    paddingBottom: 2,
   },
   sectionTitle: {
-    color: '#AAA',
-    fontSize: 13,
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
     fontWeight: '700',
     textTransform: 'uppercase',
-    letterSpacing: 0.4
+    letterSpacing: 0.4,
   },
-  sectionTotal: {
-    color: '#FFF',
-    fontSize: 13,
-    fontWeight: '700'
+  sectionTotal: { color: colors.textPrimary, fontSize: fontSize.sm, fontWeight: '700' },
+  sectionOwned: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 2 },
+
+  // Modals
+  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0, 0, 0, 0.75)' },
+  modalContent: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    padding: spacing(6),
+    paddingBottom: Platform.OS === 'ios' ? spacing(10) : spacing(6),
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  sectionOwned: {
-    color: '#888',
-    fontSize: 11,
-    marginTop: 2
+  modalTitle: { color: colors.textPrimary, fontSize: fontSize.lg, fontWeight: '800', marginBottom: spacing(4) },
+  inputLabel: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600', marginBottom: 6 },
+  modalInput: {
+    backgroundColor: colors.surfaceInput,
+    borderRadius: radius.sm,
+    padding: spacing(3),
+    color: colors.textPrimary,
+    fontSize: fontSize.md,
+    marginBottom: spacing(4),
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  companyCard: {
-    borderColor: '#3F51B5'
+  multilineInput: { minHeight: 78, textAlignVertical: 'top' },
+  segmentedRow: { flexDirection: 'row', gap: 8, marginBottom: spacing(4) },
+  segmentButton: {
+    flex: 1,
+    backgroundColor: colors.surfaceInput,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: spacing(2.5),
+    alignItems: 'center',
   },
-  metaRow: {
-    flexDirection: 'row',
-    gap: 6,
-    marginTop: 6,
-    flexWrap: 'wrap'
+  segmentButtonActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
+  segmentButtonText: { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '700' },
+  segmentButtonTextActive: { color: colors.accent },
+  networkSelector: { flexDirection: 'row', gap: 8, marginBottom: spacing(4) },
+  networkButton: {
+    flex: 1,
+    backgroundColor: colors.surfaceInput,
+    paddingVertical: spacing(2.5),
+    borderRadius: radius.sm,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  ownerBadge: {
-    color: '#BDBDBD',
-    backgroundColor: '#2A2A2A',
-    borderRadius: 999,
-    overflow: 'hidden',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    fontSize: 11,
-    fontWeight: '700'
-  },
-  companyBadge: {
-    color: '#C5CAE9',
-    backgroundColor: '#28335F'
-  },
-  shareBadge: {
-    color: '#9CCC65',
-    backgroundColor: '#20301E',
-    borderRadius: 999,
-    overflow: 'hidden',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    fontSize: 11,
-    fontWeight: '700'
-  },
-  ownedValue: {
-    color: '#9CCC65',
-    fontSize: 11,
-    marginTop: 3
-  },
-  modelNote: {
-    color: '#AAA',
-    fontSize: 12,
-    lineHeight: 17,
-    marginBottom: 10
-  },
+  networkButtonActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
+  networkButtonText: { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '600' },
+  networkButtonTextActive: { color: colors.accent },
+  modalButtons: { flexDirection: 'row', gap: spacing(3), marginTop: spacing(2) },
+  modalButton: { flex: 1, paddingVertical: spacing(3), borderRadius: radius.sm, alignItems: 'center' },
+  cancelButton: { backgroundColor: colors.surfaceAlt },
+  saveButton: { backgroundColor: colors.accent },
+  buttonText: { color: '#FFF', fontWeight: '700', fontSize: fontSize.md },
 
   // History styles
   historyRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 12,
+    paddingVertical: spacing(3),
     borderBottomWidth: 1,
-    borderBottomColor: '#2A2A2A',
-    alignItems: 'center'
+    borderBottomColor: colors.border,
+    alignItems: 'center',
   },
-  historySource: {
-    color: '#FFF',
-    fontSize: 14,
-    fontWeight: '500',
-    textTransform: 'capitalize'
-  },
-  historyDate: {
-    color: '#888',
-    fontSize: 12,
-    marginTop: 4
-  },
-  historyAmount: {
-    color: '#4CAF50',
-    fontSize: 14,
-    fontWeight: 'bold'
-  },
-  historyUsd: {
-    color: '#AAA',
-    fontSize: 12,
-    marginTop: 4
-  }
+  historySource: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: '600', textTransform: 'capitalize' },
+  historyDate: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 4 },
+  historyAmount: { color: colors.accent, fontSize: fontSize.md, fontWeight: '700' },
+  historyUsd: { color: colors.textSecondary, fontSize: fontSize.xs, marginTop: 4 },
 });
