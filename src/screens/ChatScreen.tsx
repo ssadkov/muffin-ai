@@ -22,7 +22,7 @@ import StatusChip from '../components/StatusChip';
 import TypingDots from '../components/TypingDots';
 import ThinkingBox from '../components/ThinkingBox';
 import { askMuffinAi, continueMuffinAi } from '../agent/muffinAiAgent';
-import { downloadModelIfNeeded, initLocalModel, checkModelExists, isModelLoaded } from '../services/qvacService';
+import { downloadModelIfNeeded, initLocalModel, checkModelExists, isModelLoaded, InferenceStats } from '../services/qvacService';
 import { recognizeImageText, parseBalanceFromOcrText } from '../services/ocrService';
 import { upsertAccountBalance, executeBalanceUpdate, getLatestBalances, updateGoal, getSetting } from '../tools/databaseTools';
 import { getBitcoinPrice } from '../tools/cryptoApiTools';
@@ -52,6 +52,8 @@ interface Message {
   countdown?: number;
   rawToolCallText?: string;
   isToolConfirmation?: boolean;
+  // QVAC on-device inference telemetry, shown as a badge under the answer.
+  stats?: InferenceStats;
 }
 
 const TOOL_COUNTDOWN_SECONDS = 5;
@@ -343,7 +345,7 @@ export default function ChatScreen() {
             return m;
           }));
         }, history);
-        await handleAiResponse(cleanText, response.message, aiMsgId);
+        await handleAiResponse(cleanText, response.message, aiMsgId, response.stats);
       } else {
         Alert.alert(t('noSpeechTitle', lang), t('noSpeechDesc', lang));
       }
@@ -389,7 +391,7 @@ export default function ChatScreen() {
           return m;
         }));
       }, history);
-      await handleAiResponse(userMsg.text, response.message, aiMsgId);
+      await handleAiResponse(userMsg.text, response.message, aiMsgId, response.stats);
     } catch (e) {
       console.error(e);
       setMessages(prev => prev.map(m => {
@@ -403,7 +405,7 @@ export default function ChatScreen() {
     }
   };
 
-  const handleAiResponse = async (userQuestion: string, aiText: string, aiMsgId?: string) => {
+  const handleAiResponse = async (userQuestion: string, aiText: string, aiMsgId?: string, stats?: InferenceStats) => {
     if (aiText.includes('TOOL_CALL: BTC_PRICE')) {
       const msgId = Date.now().toString();
       const newMsg: Message = {
@@ -414,7 +416,8 @@ export default function ChatScreen() {
         toolCallType: 'BTC_PRICE',
         toolCallStatus: 'pending',
         countdown: 5,
-        rawToolCallText: aiText
+        rawToolCallText: aiText,
+        stats
       };
       setMessages(prev => {
         const filtered = prev.filter(m => m.id !== aiMsgId);
@@ -451,7 +454,8 @@ export default function ChatScreen() {
             toolCallData: { ...toolData, accountName },
             toolCallStatus: 'pending',
             countdown: 5,
-            rawToolCallText: aiText
+            rawToolCallText: aiText,
+            stats
           };
 
           setMessages(prev => {
@@ -497,7 +501,8 @@ export default function ChatScreen() {
             toolCallData: toolData,
             toolCallStatus: 'pending',
             countdown: 5,
-            rawToolCallText: aiText
+            rawToolCallText: aiText,
+            stats
           };
 
           setMessages(prev => {
@@ -529,9 +534,9 @@ export default function ChatScreen() {
     }
     else {
       if (aiMsgId) {
-        setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, text: aiText } : m));
+        setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, text: aiText, stats } : m));
       } else {
-        setMessages(prev => [...prev, { id: Date.now().toString(), text: aiText, isUser: false }]);
+        setMessages(prev => [...prev, { id: Date.now().toString(), text: aiText, isUser: false, stats }]);
       }
     }
 
@@ -605,7 +610,7 @@ export default function ChatScreen() {
         },
         history
       );
-      await handleAiResponse(userQuestion, response.message, aiMsgId);
+      await handleAiResponse(userQuestion, response.message, aiMsgId, response.stats);
     } catch (e) {
       console.error(e);
       setMessages(prev => prev.map(m => {
@@ -859,7 +864,7 @@ export default function ChatScreen() {
               return m;
             }));
           }, history);
-          await handleAiResponse(userText, response.message, aiMsgId);
+          await handleAiResponse(userText, response.message, aiMsgId, response.stats);
         } catch (e) {
           console.error(e);
           setMessages(prev => prev.map(m => {
@@ -917,6 +922,43 @@ export default function ChatScreen() {
     }
     return item.text;
   };
+
+  // Build the short pills shown in the on-device inference badge under an
+  // answer. Each pill is independent so missing engine stats just drop out.
+  const buildStatsPills = (stats: InferenceStats): string[] => {
+    const pills: string[] = [];
+    if (stats.backendDevice === 'gpu') {
+      pills.push(lang === 'ru' ? 'GPU' : 'GPU');
+    } else if (stats.backendDevice === 'cpu') {
+      pills.push('CPU');
+    }
+    if (stats.tokensPerSec > 0) {
+      pills.push(`${stats.tokensPerSec.toFixed(1)} tok/s`);
+    }
+    if (stats.ttftMs > 0) {
+      pills.push(`TTFT ${Math.round(stats.ttftMs)} ms`);
+    }
+    if (stats.cacheTokens && stats.cacheTokens > 0) {
+      pills.push(lang === 'ru' ? 'KV-кэш' : 'KV cache');
+    }
+    return pills;
+  };
+
+  // Shared "on-device" inference badge, rendered under plain answers and inside
+  // tool-call cards (a tool call is still produced by an on-device QVAC inference).
+  const renderStatsBadge = (stats: InferenceStats) => (
+    <View style={styles.statsRow}>
+      <View style={styles.statsLeadPill}>
+        <Ionicons name="flash" size={11} color={colors.accent} />
+        <Text style={styles.statsLeadText}>{t('onDeviceBadge', lang)}</Text>
+      </View>
+      {buildStatsPills(stats).map((pill, idx) => (
+        <View key={idx} style={styles.statsPill}>
+          <Text style={styles.statsPillText}>{pill}</Text>
+        </View>
+      ))}
+    </View>
+  );
 
   const renderMessage = ({ item }: { item: Message }) => {
     if (item.isToolCall) {
@@ -1175,6 +1217,8 @@ export default function ChatScreen() {
                 </Text>
               </View>
             )}
+
+            {item.stats && renderStatsBadge(item.stats)}
           </View>
         </View>
       );
@@ -1211,6 +1255,8 @@ export default function ChatScreen() {
               {displayed}
             </Text>
           )}
+
+          {!item.isUser && !showTyping && item.stats && renderStatsBadge(item.stats)}
 
           {item.isPendingOcrConfirm && item.ocrData && (
             <View style={styles.ocrEditContainer}>
@@ -1375,6 +1421,35 @@ const styles = StyleSheet.create({
   messageText: { fontSize: fontSize.md, lineHeight: 22 },
   userText: { color: '#FFF' },
   aiText: { color: colors.textPrimary },
+  statsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: spacing(2),
+    paddingTop: spacing(2),
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  statsLeadPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: colors.accentSoft,
+    paddingVertical: 2,
+    paddingHorizontal: 7,
+    borderRadius: radius.pill,
+  },
+  statsLeadText: { color: colors.accent, fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
+  statsPill: {
+    backgroundColor: colors.surfaceAlt,
+    paddingVertical: 2,
+    paddingHorizontal: 7,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  statsPillText: { color: colors.textSecondary, fontSize: 10, fontWeight: '600' },
   inputContainer: {
     flexDirection: 'row',
     paddingHorizontal: spacing(3),

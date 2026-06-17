@@ -1,4 +1,4 @@
-import { askLocalQVAC } from '../services/qvacService';
+import { askLocalQVAC, InferenceStats } from '../services/qvacService';
 import {
   getLatestBalances,
   getActiveGoals,
@@ -576,7 +576,7 @@ async function askStructuredCommandFallback(
   accounts: ReturnType<typeof getLatestBalances>,
   modelType: 'qwen' | 'medpsy',
   chatHistory?: { role: 'user' | 'assistant'; content: string }[]
-): Promise<ParsedCommand | null> {
+): Promise<{ command: ParsedCommand | null; stats?: InferenceStats }> {
   const systemPrompt = `Classify a short personal-finance command.
 Return JSON only. If the user is asking a normal question or details are missing, return {"action":"none"}.
 Allowed actions:
@@ -615,10 +615,13 @@ ${question}`;
         json_schema: COMMAND_JSON_SCHEMA,
       },
     });
-    return structuredResultToCommand(parseJsonObject(response.message), accounts);
+    return {
+      command: structuredResultToCommand(parseJsonObject(response.message), accounts),
+      stats: response.stats,
+    };
   } catch (error) {
     console.warn('[MuffinAI] Structured command fallback failed:', error);
-    return null;
+    return { command: null };
   }
 }
 
@@ -627,7 +630,7 @@ export async function askMuffinAi(
   modelType: 'qwen' | 'medpsy' = 'qwen',
   onChunk?: (text: string) => void,
   chatHistory?: { role: 'user' | 'assistant'; content: string }[]
-): Promise<{ message: string }> {
+): Promise<{ message: string; stats?: InferenceStats }> {
   const accounts = getLatestBalances();
   const langSetting = getSetting('language', 'ru');
   const isRussian = langSetting === 'ru';
@@ -645,10 +648,10 @@ export async function askMuffinAi(
   }
 
   if (isPotentialCommand(question)) {
-    const structuredCommand = await askStructuredCommandFallback(question, accounts, modelType, chatHistory);
+    const { command: structuredCommand, stats: structuredStats } = await askStructuredCommandFallback(question, accounts, modelType, chatHistory);
     if (structuredCommand) {
       console.log(`[MuffinAI] Structured command fallback parsed: ${structuredCommand.action}`);
-      return { message: commandToToolCall(structuredCommand) };
+      return { message: commandToToolCall(structuredCommand), stats: structuredStats };
     }
   }
 
@@ -727,7 +730,7 @@ export async function continueMuffinAi(
   modelType: 'qwen' | 'medpsy' = 'qwen',
   onChunk?: (text: string) => void,
   chatHistory?: { role: 'user' | 'assistant'; content: string }[]
-): Promise<{ message: string }> {
+): Promise<{ message: string; stats?: InferenceStats }> {
   const context = buildContextString();
   const langSetting = getSetting('language', 'ru');
   const isRussian = langSetting === 'ru';

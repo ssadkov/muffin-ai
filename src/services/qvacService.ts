@@ -2,6 +2,21 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { loadModel, completion } from '@qvac/sdk';
 import { addAuditLog } from './inferenceLogService';
 
+/**
+ * Per-inference telemetry pulled from our own wall-clock timing plus the
+ * engine's RuntimeStats. Surfaced in the chat UI as the "on-device" badge so
+ * a reviewer can see, per answer, that it ran locally (GPU vs CPU), how fast,
+ * and whether the KV cache was reused. All fields are best-effort.
+ */
+export type InferenceStats = {
+  ttftMs: number;
+  generationTimeMs: number;
+  tokenCount: number;
+  tokensPerSec: number;
+  backendDevice?: string;
+  cacheTokens?: number;
+};
+
 const loadedModels: { [filename: string]: string } = {};
 
 export function isModelLoaded(modelType: 'qwen' | 'medpsy' = 'qwen'): boolean {
@@ -229,7 +244,16 @@ export async function askLocalQVAC(
       tokensPerSec: parseFloat(tokensPerSec.toFixed(2))
     });
 
-    return { message: fullText || "(empty response)" };
+    const stats: InferenceStats = {
+      ttftMs,
+      generationTimeMs,
+      tokenCount,
+      tokensPerSec: parseFloat(tokensPerSec.toFixed(2)),
+      backendDevice,
+      cacheTokens,
+    };
+
+    return { message: fullText || "(empty response)", stats };
   } catch (e: any) {
     const endTime = Date.now();
     console.error("QVAC completion error:", e?.message || e);

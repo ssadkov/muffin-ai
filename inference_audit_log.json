@@ -1,0 +1,331 @@
+[
+  {
+    "type": "model_load",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "durationMs": 9818,
+    "success": true,
+    "timestamp": "2026-06-17T07:29:35.976Z"
+  },
+  {
+    "type": "model_load",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "durationMs": 756,
+    "success": true,
+    "timestamp": "2026-06-17T07:32:13.445Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a financial parsing bot. Extract the bank/service name, the main balance amount, and the currency from the provided OCR text. (Bybit-style screenshot OCR input.)",
+    "response": "{\n  \"bank\": \"Unknown\",\n  \"amount\": 1897.53,\n  \"currency\": \"USD\"\n}",
+    "tokenCount": 29,
+    "ttftMs": 1117,
+    "generationTimeMs": 1016,
+    "tokensPerSec": 28.54,
+    "timestamp": "2026-06-17T07:32:37.329Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "Classify a short personal-finance command (structured json_schema fallback). User text: \"Какой сейчас космит кое-то?\"",
+    "response": "[Error: QVAC SDK input validation error during structured command classification — full stack trace truncated]",
+    "tokenCount": 0,
+    "ttftMs": 15,
+    "generationTimeMs": 0,
+    "tokensPerSec": 0,
+    "timestamp": "2026-06-17T07:34:08.370Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a private local financial assistant on iPhone. (Full LOCAL FINANCIAL MEMORY context + tool-call instructions.) USER QUESTION: что на космит (Kaspi Gold)?",
+    "response": "Космит (Kaspi Gold) сейчас содержит 1100000 KZT, что эквивалентно $2420 USD.",
+    "tokenCount": 38,
+    "ttftMs": 4896,
+    "generationTimeMs": 1415,
+    "tokensPerSec": 26.86,
+    "timestamp": "2026-06-17T07:34:14.691Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "Classify a short personal-finance command (structured json_schema fallback). User text: \"какой сейчас курс биткоина?\"",
+    "response": "[Error: QVAC SDK input validation error during structured command classification — full stack trace truncated]",
+    "tokenCount": 0,
+    "ttftMs": 1,
+    "generationTimeMs": 0,
+    "tokensPerSec": 0,
+    "timestamp": "2026-06-17T07:34:20.766Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a private local financial assistant on iPhone. (Full LOCAL FINANCIAL MEMORY context.) USER QUESTION: какой сейчас курс биткоина?",
+    "response": "Курс BTC сейчас составляет $68000.00 USD.",
+    "tokenCount": 15,
+    "ttftMs": 4571,
+    "generationTimeMs": 611,
+    "tokensPerSec": 24.55,
+    "timestamp": "2026-06-17T07:34:25.957Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "Classify a short personal-finance command (structured json_schema fallback). User text: \"какой сейчас курс биткоина?\"",
+    "response": "[Error: QVAC SDK input validation error during structured command classification — full stack trace truncated]",
+    "tokenCount": 0,
+    "ttftMs": 2,
+    "generationTimeMs": 0,
+    "tokensPerSec": 0,
+    "timestamp": "2026-06-17T07:34:51.029Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a private local financial assistant on iPhone. (Full LOCAL FINANCIAL MEMORY context.) USER QUESTION: какой сейчас курс биткоина?",
+    "response": "Текущий курс BTC составляет $68000.00 USD.",
+    "tokenCount": 18,
+    "ttftMs": 4492,
+    "generationTimeMs": 608,
+    "tokensPerSec": 29.61,
+    "timestamp": "2026-06-17T07:34:56.137Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a private local financial assistant on iPhone. (Full LOCAL FINANCIAL MEMORY context.) USER QUESTION: что такое биткоин?",
+    "response": "Это криптовалюта Bitcoin (BTC), которая имеет курс около $68000.00 USD в текущий момент.",
+    "tokenCount": 32,
+    "ttftMs": 4343,
+    "generationTimeMs": 1219,
+    "tokensPerSec": 26.25,
+    "timestamp": "2026-06-17T07:35:51.673Z"
+  },
+  {
+    "type": "model_load",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "durationMs": 2811,
+    "success": true,
+    "timestamp": "2026-06-17T11:03:53.110Z"
+  },
+  {
+    "type": "model_load",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "durationMs": 2990,
+    "success": true,
+    "timestamp": "2026-06-17T11:35:39.382Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a private local financial assistant on iPhone. (Full LOCAL FINANCIAL MEMORY context.) USER QUESTION: курс рубля?",
+    "response": "1 RUB = $0.013803",
+    "tokenCount": 13,
+    "ttftMs": 4251,
+    "generationTimeMs": 506,
+    "tokensPerSec": 25.69,
+    "timestamp": "2026-06-17T11:36:29.437Z"
+  },
+  {
+    "type": "model_load",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "durationMs": 983,
+    "success": true,
+    "timestamp": "2026-06-17T11:51:51.020Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a private local AI on an iPhone. (Full LOCAL FINANCIAL MEMORY context.) USER QUESTION: balance update command review. SYSTEM: The user cancelled the UPDATE_BALANCE tool execution. Please confirm the cancellation to the user.",
+    "response": "The UPDATE_BALANCE tool execution has been cancelled. Your local financial memory is up to date with the current balances and details you've provided.",
+    "tokenCount": 28,
+    "ttftMs": 2520,
+    "generationTimeMs": 916,
+    "tokensPerSec": 30.57,
+    "timestamp": "2026-06-17T11:52:25.260Z"
+  },
+  {
+    "type": "model_load",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "durationMs": 2934,
+    "success": true,
+    "timestamp": "2026-06-17T13:30:48.055Z"
+  },
+  {
+    "type": "model_load",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "durationMs": 2916,
+    "success": true,
+    "timestamp": "2026-06-17T19:00:14.576Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a private local financial assistant on iPhone. (Full LOCAL FINANCIAL MEMORY context.) USER QUESTION: How much is left until my goal?",
+    "response": "Your goal is to reach $100,000 in liquid assets. To achieve this, you need to accumulate an additional $17445.270000000002 from your current total of $18255.739999999998. You can focus on increasing the value in your OKX Account and Kaspi Gold wallet, as these are currently contributing to your liquid assets.",
+    "tokenCount": 99,
+    "ttftMs": 4258,
+    "generationTimeMs": 4047,
+    "tokensPerSec": 24.46,
+    "timestamp": "2026-06-17T19:01:30.310Z"
+  },
+  {
+    "type": "model_load",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "durationMs": 3562,
+    "success": true,
+    "timestamp": "2026-06-17T19:27:20.414Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a private local financial assistant on iPhone. (Full LOCAL FINANCIAL MEMORY context.) USER QUESTION: сколько на франсент (Aptos Wallet)?",
+    "response": "Ваш францент (Aptos Wallet) содержит 4250 USD.",
+    "tokenCount": 20,
+    "ttftMs": 10830,
+    "generationTimeMs": 2127,
+    "tokensPerSec": 9.4,
+    "timestamp": "2026-06-17T19:27:57.682Z"
+  },
+  {
+    "type": "model_load",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "durationMs": 2806,
+    "success": true,
+    "timestamp": "2026-06-17T19:32:32.089Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a private local financial assistant on iPhone. (Full LOCAL FINANCIAL MEMORY context.) USER QUESTION: hello",
+    "response": "Hello! How can I assist you today?",
+    "tokenCount": 9,
+    "ttftMs": 4136,
+    "generationTimeMs": 307,
+    "tokensPerSec": 29.32,
+    "timestamp": "2026-06-17T19:33:34.879Z"
+  },
+  {
+    "type": "model_load",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "durationMs": 2556,
+    "success": true,
+    "timestamp": "2026-06-17T19:36:18.426Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a financial parsing bot. Extract the bank/service name, the main balance amount, and the currency from the provided OCR text. OCR TEXT: TOO \"Эдбиз\" ... Основной KZ**7874 1475 132,28 т (business banking screenshot).",
+    "response": "{\n  \"bank\": \"Unknown\",\n  \"amount\": 1475,\n  \"currency\": \"KZT\"\n}",
+    "tokenCount": 28,
+    "ttftMs": 1015,
+    "generationTimeMs": 916,
+    "tokensPerSec": 30.57,
+    "timestamp": "2026-06-17T19:36:33.612Z"
+  },
+  {
+    "type": "model_load",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "durationMs": 788,
+    "success": true,
+    "timestamp": "2026-06-17T19:37:25.167Z"
+  },
+  {
+    "type": "model_load",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "durationMs": 819,
+    "success": true,
+    "timestamp": "2026-06-17T19:38:39.098Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a financial parsing bot. Extract the bank/service name, the main balance amount, and the currency from the provided OCR text. OCR TEXT: Сергей > Кэшбэк ... Текущий зарплатный счёт 20 604,33 ₽ (Alfa-Bank screenshot).",
+    "response": "{\n  \"bank\": \"Unknown\",\n  \"amount\": 20604.33,\n  \"currency\": \"₽\"\n}",
+    "tokenCount": 30,
+    "ttftMs": 1015,
+    "generationTimeMs": 1025,
+    "tokensPerSec": 29.27,
+    "timestamp": "2026-06-17T19:38:52.268Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a private local AI on an iPhone. (Full LOCAL FINANCIAL MEMORY context.) USER QUESTION: I just updated my Alfa bank personal balance to 20604.33 ₽. SYSTEM: OCR screenshot balance update confirmed (USD equivalent: $284.40). Inform the user and confirm the new balance. Do NOT output any tool calls.",
+    "response": "The balance of your Alfa bank personal account has been updated successfully to 20604.33 ₽ (USD equivalent: $284.40).",
+    "tokenCount": 37,
+    "ttftMs": 2881,
+    "generationTimeMs": 1315,
+    "tokensPerSec": 28.14,
+    "timestamp": "2026-06-17T19:39:28.638Z"
+  },
+  {
+    "type": "model_load",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "durationMs": 989,
+    "success": true,
+    "timestamp": "2026-06-17T19:41:39.978Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a financial parsing bot. Extract the bank/service name, the main balance amount, and the currency from the provided OCR text. OCR TEXT: ТБАНК Black Premium 2 461,37 ₽ ... (T-Bank screenshot).",
+    "response": "{\n  \"bank\": \"ТБАНК\",\n  \"amount\": 2461.37,\n  \"currency\": \"₽\"\n}",
+    "tokenCount": 32,
+    "ttftMs": 914,
+    "generationTimeMs": 1122,
+    "tokensPerSec": 28.52,
+    "timestamp": "2026-06-17T19:42:17.302Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a private local financial assistant on iPhone. (Full LOCAL FINANCIAL MEMORY context + tool-call instructions.) USER QUESTION: add 500 to Bybit",
+    "response": "[TOOL_CALL: UPDATE_BALANCE: {\"accountId\": \"acc_bybit\", \"amount\": 500, \"currency\": \"USD\", \"type\": \"add\"}]",
+    "tokenCount": 38,
+    "ttftMs": 5038,
+    "generationTimeMs": 2030,
+    "tokensPerSec": 18.72,
+    "timestamp": "2026-06-17T19:46:33.963Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a financial parsing bot. Extract the bank/service name, the main balance amount, and the currency from the provided OCR text. OCR TEXT: ТБАНК Black Premium 2 461,37 ₽ ... (T-Bank screenshot, re-run).",
+    "response": "{\n  \"bank\": \"ТБАНК\",\n  \"amount\": 2461.37,\n  \"currency\": \"₽\"\n}",
+    "tokenCount": 32,
+    "ttftMs": 1012,
+    "generationTimeMs": 1219,
+    "tokensPerSec": 26.25,
+    "timestamp": "2026-06-17T19:47:16.480Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a private local AI on an iPhone. (Full LOCAL FINANCIAL MEMORY context.) USER QUESTION: I just updated my ТБАНК balance to 2461.37 ₽. SYSTEM: OCR screenshot balance update confirmed (USD equivalent: $33.97). Inform the user and confirm the new balance. Do NOT output any tool calls.",
+    "response": "The balance of your ТБАНК account has been successfully updated to 2461.37 ₽ (USD equivalent: $33.97).",
+    "tokenCount": 35,
+    "ttftMs": 2957,
+    "generationTimeMs": 1418,
+    "tokensPerSec": 24.68,
+    "timestamp": "2026-06-17T19:47:40.303Z"
+  },
+  {
+    "type": "model_load",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "durationMs": 2791,
+    "success": true,
+    "timestamp": "2026-06-17T20:14:36.790Z"
+  },
+  {
+    "type": "inference",
+    "modelName": "qwen2.5-3b-q4.gguf",
+    "prompt": "You are a private local financial assistant on iPhone. (Full LOCAL FINANCIAL MEMORY context.) USER QUESTION: what is my financial goal?",
+    "response": "Your financial goal is to reach $100,000 in liquid assets.",
+    "tokenCount": 18,
+    "ttftMs": 4431,
+    "generationTimeMs": 712,
+    "tokensPerSec": 25.28,
+    "timestamp": "2026-06-17T20:16:18.729Z"
+  }
+]

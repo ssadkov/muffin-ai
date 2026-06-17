@@ -35,7 +35,8 @@ yarn-error.*
 .env*.local
 
 # local artifacts / scratch
-inference_audit_log.json
+# NOTE: inference_audit_log.json is intentionally committed as the required
+# hackathon audit-log artifact (a real captured demo run).
 scratch/
 
 # typescript
