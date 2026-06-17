@@ -7,8 +7,7 @@ import {
   SectionList,
   ScrollView,
   TouchableOpacity, 
-  Modal, 
-  TextInput, 
+  Modal,
   Alert,
   KeyboardAvoidingView,
   Platform,
@@ -21,6 +20,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, gradients, radius, spacing, fontSize, shadow } from '../theme/theme';
 import StatusChip from '../components/StatusChip';
+import FormInput from '../components/FormInput';
+import EmptyState from '../components/EmptyState';
 import {
   getLatestBalances,
   updateAccountAddress, 
@@ -38,6 +39,12 @@ import { testBybitConnection } from '../services/bybitService';
 import { syncPublicWallets } from '../services/walletSyncService';
 import { useIsFocused } from '@react-navigation/native';
 import { t, Language } from '../localization/localization';
+
+const NETWORK_META: Record<string, { label: string; color: string; soft: string; abbr: string }> = {
+  'solana_public_wallet':   { label: 'Solana',   color: '#9945FF', soft: 'rgba(153,69,255,0.14)', abbr: 'SOL' },
+  'aptos_public_wallet':    { label: 'Aptos',    color: '#00C8FF', soft: 'rgba(0,200,255,0.14)',   abbr: 'APT' },
+  'ethereum_public_wallet': { label: 'Ethereum', color: '#627EEA', soft: 'rgba(98,126,234,0.14)',  abbr: 'ETH' },
+};
 
 function getAccountVisual(item: any): { icon: keyof typeof Ionicons.glyphMap; color: string; soft: string } {
   const isCryptoWallet = item.source?.endsWith('_wallet') || item.type === 'crypto_wallet';
@@ -465,6 +472,13 @@ export default function AccountsScreen() {
         renderSectionHeader={renderSectionHeader}
         contentContainerStyle={{ gap: 12, paddingBottom: 20 }}
         stickySectionHeadersEnabled={false}
+        ListEmptyComponent={
+          <EmptyState
+            icon="wallet-outline"
+            title={lang === 'ru' ? 'Нет подключённых счетов' : 'No accounts connected'}
+            subtitle={lang === 'ru' ? 'Добавьте кошелёк или подключите биржу выше' : 'Add a wallet or connect an exchange above'}
+          />
+        }
       />
 
       {/* Edit Address Modal */}
@@ -505,11 +519,9 @@ export default function AccountsScreen() {
                   </TouchableOpacity>
                 </View>
 
-                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Твоя доля, %' : 'Your share, %'}</Text>
-                <TextInput
-                  style={styles.modalInput}
+                <FormInput
+                  label={lang === 'ru' ? 'Твоя доля, %' : 'Your share, %'}
                   placeholder="100"
-                  placeholderTextColor="#666"
                   value={ownershipInput}
                   onChangeText={setOwnershipInput}
                   keyboardType="numeric"
@@ -530,25 +542,22 @@ export default function AccountsScreen() {
                   ))}
                 </View>
 
-                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Комментарий для AI' : 'AI note'}</Text>
-                <TextInput
-                  style={[styles.modalInput, styles.multilineInput]}
+                <FormInput
+                  label={lang === 'ru' ? 'Комментарий для AI' : 'AI note'}
                   placeholder={lang === 'ru' ? 'Например: деньги компании, мне принадлежит 40%, рубли' : 'Example: company money, my share is 40%, RUB'}
-                  placeholderTextColor="#666"
                   value={modelNoteInput}
                   onChangeText={setModelNoteInput}
                   multiline
                 />
 
-                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Адрес / реквизиты' : 'Address / details'}</Text>
-                <TextInput
-                  style={styles.modalInput}
+                <FormInput
+                  label={lang === 'ru' ? 'Адрес / реквизиты' : 'Address / details'}
                   placeholder={t('publicAddressPlaceholder', lang)}
-                  placeholderTextColor="#666"
                   value={addressInput}
                   onChangeText={setAddressInput}
                   autoCapitalize="none"
                   autoCorrect={false}
+                  mono
                 />
                 
                 <View style={styles.modalButtons}>
@@ -586,46 +595,44 @@ export default function AccountsScreen() {
             >
               <Text style={styles.modalTitle}>{lang === 'ru' ? 'Добавить кошелек' : 'Add New Wallet'}</Text>
               
-              <Text style={styles.inputLabel}>{t('newWalletNameLabel', lang)}</Text>
-              <TextInput
-                style={styles.modalInput}
+              <FormInput
+                label={t('newWalletNameLabel', lang)}
                 placeholder={t('newWalletNamePlaceholder', lang)}
-                placeholderTextColor="#666"
                 value={newWalletName}
                 onChangeText={setNewWalletName}
               />
 
               <Text style={styles.inputLabel}>{t('walletNetworkLabel', lang)}</Text>
               <View style={styles.networkSelector}>
-                <TouchableOpacity 
-                  style={[styles.networkButton, newWalletNetwork === 'solana_public_wallet' && styles.networkButtonActive]}
-                  onPress={() => setNewWalletNetwork('solana_public_wallet')}
-                >
-                  <Text style={[styles.networkButtonText, newWalletNetwork === 'solana_public_wallet' && styles.networkButtonTextActive]}>Solana</Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.networkButton, newWalletNetwork === 'aptos_public_wallet' && styles.networkButtonActive]}
-                  onPress={() => setNewWalletNetwork('aptos_public_wallet')}
-                >
-                  <Text style={[styles.networkButtonText, newWalletNetwork === 'aptos_public_wallet' && styles.networkButtonTextActive]}>Aptos</Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.networkButton, newWalletNetwork === 'ethereum_public_wallet' && styles.networkButtonActive]}
-                  onPress={() => setNewWalletNetwork('ethereum_public_wallet')}
-                >
-                  <Text style={[styles.networkButtonText, newWalletNetwork === 'ethereum_public_wallet' && styles.networkButtonTextActive]}>Ethereum / Other</Text>
-                </TouchableOpacity>
+                {Object.entries(NETWORK_META).map(([key, meta]) => {
+                  const isActive = newWalletNetwork === key;
+                  return (
+                    <TouchableOpacity
+                      key={key}
+                      style={[styles.networkOptionRow, isActive && { borderColor: meta.color, backgroundColor: meta.soft }]}
+                      onPress={() => setNewWalletNetwork(key)}
+                    >
+                      <View style={[styles.networkBadge, { backgroundColor: meta.color }]}>
+                        <Text style={styles.networkBadgeText}>{meta.abbr.charAt(0)}</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.networkOptionLabel, isActive && { color: meta.color }]}>{meta.label}</Text>
+                        <Text style={styles.networkOptionSub}>{meta.abbr}</Text>
+                      </View>
+                      {isActive && <Ionicons name="checkmark-circle" size={18} color={meta.color} />}
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
 
-              <Text style={styles.inputLabel}>{t('walletAddressLabel', lang)}</Text>
-              <TextInput
-                style={[styles.modalInput, { fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' }]}
+              <FormInput
+                label={t('walletAddressLabel', lang)}
                 placeholder={t('walletAddressPlaceholder', lang)}
-                placeholderTextColor="#666"
                 value={newWalletAddress}
                 onChangeText={setNewWalletAddress}
                 autoCapitalize="none"
                 autoCorrect={false}
+                mono
               />
               
               <View style={styles.modalButtons}>
@@ -662,36 +669,32 @@ export default function AccountsScreen() {
             >
               <Text style={styles.modalTitle}>{lang === 'ru' ? 'Подключение биржи Bybit' : 'Connect Bybit Exchange'}</Text>
               
-              <Text style={styles.inputLabel}>{t('exchangeLabel', lang)}</Text>
-              <TextInput
-                style={styles.modalInput}
+              <FormInput
+                label={t('exchangeLabel', lang)}
                 placeholder={t('exchangePlaceholder', lang)}
-                placeholderTextColor="#666"
                 value={exchangeLabel}
                 onChangeText={setExchangeLabel}
               />
 
-              <Text style={styles.inputLabel}>{t('apiKeyLabel', lang)}</Text>
-              <TextInput
-                style={styles.modalInput}
+              <FormInput
+                label={t('apiKeyLabel', lang)}
                 placeholder={lang === 'ru' ? 'Введите API Key Bybit' : 'Enter Bybit API Key'}
-                placeholderTextColor="#666"
                 value={apiKey}
                 onChangeText={setApiKey}
                 autoCapitalize="none"
                 autoCorrect={false}
+                mono
               />
 
-              <Text style={styles.inputLabel}>{t('apiSecretLabel', lang)}</Text>
-              <TextInput
-                style={styles.modalInput}
+              <FormInput
+                label={t('apiSecretLabel', lang)}
                 placeholder={lang === 'ru' ? 'Введите API Secret Bybit' : 'Enter Bybit API Secret'}
-                placeholderTextColor="#666"
                 value={apiSecret}
                 onChangeText={setApiSecret}
-                secureTextEntry={true}
+                secureTextEntry
                 autoCapitalize="none"
                 autoCorrect={false}
+                mono
               />
 
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
@@ -946,19 +949,27 @@ const styles = StyleSheet.create({
   segmentButtonActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
   segmentButtonText: { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '700' },
   segmentButtonTextActive: { color: colors.accent },
-  networkSelector: { flexDirection: 'row', gap: 8, marginBottom: spacing(4) },
-  networkButton: {
-    flex: 1,
-    backgroundColor: colors.surfaceInput,
-    paddingVertical: spacing(2.5),
-    borderRadius: radius.sm,
+  networkSelector: { gap: 8, marginBottom: spacing(4) },
+  networkOptionRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: spacing(3),
+    backgroundColor: colors.surfaceInput,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
+    padding: spacing(3),
   },
-  networkButtonActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
-  networkButtonText: { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '600' },
-  networkButtonTextActive: { color: colors.accent },
+  networkBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  networkBadgeText: { color: '#FFF', fontSize: fontSize.sm, fontWeight: '800' },
+  networkOptionLabel: { color: colors.textPrimary, fontSize: fontSize.sm, fontWeight: '700' },
+  networkOptionSub: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 2 },
   modalButtons: { flexDirection: 'row', gap: spacing(3), marginTop: spacing(2) },
   modalButton: { flex: 1, paddingVertical: spacing(3), borderRadius: radius.sm, alignItems: 'center' },
   cancelButton: { backgroundColor: colors.surfaceAlt },

@@ -6,9 +6,8 @@ import {
   TouchableOpacity,
   Pressable,
   ScrollView,
-  Modal, 
-  TextInput, 
-  KeyboardAvoidingView, 
+  Modal,
+  KeyboardAvoidingView,
   Platform, 
   TouchableWithoutFeedback, 
   Keyboard,
@@ -24,6 +23,8 @@ import { colors, gradients, radius, spacing, fontSize, shadow } from '../theme/t
 import Card from '../components/Card';
 import ProgressRing from '../components/ProgressRing';
 import StatusChip from '../components/StatusChip';
+import FormInput from '../components/FormInput';
+import EmptyState from '../components/EmptyState';
 import { 
   getTotalLiquidAssets, 
   getActiveGoals, 
@@ -580,7 +581,11 @@ export default function HomeScreen() {
                     </View>
                   ))}
                   {payments.length === 0 && (
-                    <Text style={styles.emptyText}>{lang === 'ru' ? 'Платежей пока нет.' : 'No payments yet.'}</Text>
+                    <EmptyState
+                      icon="calendar-outline"
+                      title={lang === 'ru' ? 'Платежей пока нет' : 'No payments yet'}
+                      subtitle={lang === 'ru' ? 'Нажмите «Новый», чтобы добавить регулярный платёж' : 'Tap "New" to add a recurring payment'}
+                    />
                   )}
                 </View>
 
@@ -590,145 +595,6 @@ export default function HomeScreen() {
                 >
                   <Text style={styles.buttonText}>{t('close', lang)}</Text>
                 </TouchableOpacity>
-
-                {false && (
-                <>
-                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Название' : 'Title'}</Text>
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder={lang === 'ru' ? 'Ипотека, кредит, налоги' : 'Mortgage, loan, taxes'}
-                  placeholderTextColor="#666"
-                  value={paymentTitleInput}
-                  onChangeText={setPaymentTitleInput}
-                />
-
-                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Владелец' : 'Owner'}</Text>
-                <View style={styles.segmentedRow}>
-                  <TouchableOpacity
-                    style={[styles.segmentButton, paymentOwnerInput === 'personal' && styles.segmentButtonActive]}
-                    onPress={() => {
-                      setPaymentOwnerInput('personal');
-                      setPaymentAccountIdInput(null);
-                    }}
-                  >
-                    <Text style={[styles.segmentButtonText, paymentOwnerInput === 'personal' && styles.segmentButtonTextActive]}>
-                      Personal
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.segmentButton, paymentOwnerInput === 'company' && styles.segmentButtonActive]}
-                    onPress={() => {
-                      setPaymentOwnerInput('company');
-                      setPaymentAccountIdInput(null);
-                    }}
-                  >
-                    <Text style={[styles.segmentButtonText, paymentOwnerInput === 'company' && styles.segmentButtonTextActive]}>
-                      Company
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.twoColumnRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.inputLabel}>{lang === 'ru' ? 'Сумма' : 'Amount'}</Text>
-                    <TextInput
-                      style={styles.modalInput}
-                      placeholder="450000"
-                      placeholderTextColor="#666"
-                      value={paymentAmountInput}
-                      onChangeText={setPaymentAmountInput}
-                      keyboardType="numeric"
-                    />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.inputLabel}>{lang === 'ru' ? 'День месяца' : 'Due day'}</Text>
-                    <TextInput
-                      style={styles.modalInput}
-                      placeholder="25"
-                      placeholderTextColor="#666"
-                      value={paymentDueDayInput}
-                      onChangeText={setPaymentDueDayInput}
-                      keyboardType="numeric"
-                    />
-                  </View>
-                </View>
-
-                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Валюта' : 'Currency'}</Text>
-                <View style={styles.segmentedRow}>
-                  {['KZT', 'RUB', 'USD'].map((currency) => (
-                    <TouchableOpacity
-                      key={currency}
-                      style={[styles.segmentButton, paymentCurrencyInput === currency && styles.segmentButtonActive]}
-                      onPress={() => setPaymentCurrencyInput(currency)}
-                    >
-                      <Text style={[styles.segmentButtonText, paymentCurrencyInput === currency && styles.segmentButtonTextActive]}>
-                        {currency}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Счет для оплаты' : 'Payment account'}</Text>
-                <View style={styles.accountPicker}>
-                  <TouchableOpacity
-                    style={[styles.accountChip, paymentAccountIdInput === null && styles.accountChipActive]}
-                    onPress={() => setPaymentAccountIdInput(null)}
-                  >
-                    <Text style={[styles.accountChipText, paymentAccountIdInput === null && styles.accountChipTextActive]}>
-                      {lang === 'ru' ? 'Не привязан' : 'Unassigned'}
-                    </Text>
-                  </TouchableOpacity>
-                  {scopedPaymentAccounts.map((account: any) => (
-                    <TouchableOpacity
-                      key={account.id}
-                      style={[styles.accountChip, paymentAccountIdInput === account.id && styles.accountChipActive]}
-                      onPress={() => setPaymentAccountIdInput(account.id)}
-                    >
-                      <Text style={[styles.accountChipText, paymentAccountIdInput === account.id && styles.accountChipTextActive]}>
-                        {account.name}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Напомнить за N дней' : 'Remind days before'}</Text>
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="3"
-                  placeholderTextColor="#666"
-                  value={paymentRemindInput}
-                  onChangeText={setPaymentRemindInput}
-                  keyboardType="numeric"
-                />
-
-                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Комментарий для AI' : 'AI note'}</Text>
-                <TextInput
-                  style={[styles.modalInput, styles.multilineInput]}
-                  placeholder={lang === 'ru' ? 'Например: платить с company RUB, если не хватает - конвертировать USD' : 'Example: pay from company RUB; convert USD if short'}
-                  placeholderTextColor="#666"
-                  value={paymentNoteInput}
-                  onChangeText={setPaymentNoteInput}
-                  multiline
-                />
-
-                <View style={styles.modalButtons}>
-                  <TouchableOpacity
-                    style={[styles.modalButton, styles.cancelButton]}
-                    onPress={() => setIsPaymentsModalVisible(false)}
-                  >
-                    <Text style={styles.buttonText}>{t('close', lang)}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.modalButton, styles.saveButton]}
-                    onPress={savePayment}
-                  >
-                    <Text style={styles.buttonText}>
-                      {editingPaymentId ? t('save', lang) : (lang === 'ru' ? 'Добавить' : 'Add')}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-                </>
-                )}
               </ScrollView>
             </KeyboardAvoidingView>
           </View>
@@ -761,15 +627,13 @@ export default function HomeScreen() {
                       : (lang === 'ru' ? 'Новый платеж' : 'New payment')}
                   </Text>
                   <TouchableOpacity onPress={closePaymentEditor} style={{ padding: 4 }}>
-                    <Text style={{ color: '#888', fontSize: 18, fontWeight: 'bold' }}>×</Text>
+                    <Ionicons name="close" size={20} color={colors.textMuted} />
                   </TouchableOpacity>
                 </View>
 
-                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Название' : 'Title'}</Text>
-                <TextInput
-                  style={styles.modalInput}
+                <FormInput
+                  label={lang === 'ru' ? 'Название' : 'Title'}
                   placeholder={lang === 'ru' ? 'Ипотека, кредит, налоги' : 'Mortgage, loan, taxes'}
-                  placeholderTextColor="#666"
                   value={paymentTitleInput}
                   onChangeText={setPaymentTitleInput}
                   returnKeyType="next"
@@ -803,11 +667,9 @@ export default function HomeScreen() {
 
                 <View style={styles.twoColumnRow}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.inputLabel}>{lang === 'ru' ? 'Сумма' : 'Amount'}</Text>
-                    <TextInput
-                      style={styles.modalInput}
+                    <FormInput
+                      label={lang === 'ru' ? 'Сумма' : 'Amount'}
                       placeholder="450000"
-                      placeholderTextColor="#666"
                       value={paymentAmountInput}
                       onChangeText={setPaymentAmountInput}
                       keyboardType="decimal-pad"
@@ -815,11 +677,9 @@ export default function HomeScreen() {
                     />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.inputLabel}>{lang === 'ru' ? 'День месяца' : 'Due day'}</Text>
-                    <TextInput
-                      style={styles.modalInput}
+                    <FormInput
+                      label={lang === 'ru' ? 'День месяца' : 'Due day'}
                       placeholder="25"
-                      placeholderTextColor="#666"
                       value={paymentDueDayInput}
                       onChangeText={setPaymentDueDayInput}
                       keyboardType="number-pad"
@@ -866,22 +726,18 @@ export default function HomeScreen() {
                   ))}
                 </View>
 
-                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Напомнить за N дней' : 'Remind days before'}</Text>
-                <TextInput
-                  style={styles.modalInput}
+                <FormInput
+                  label={lang === 'ru' ? 'Напомнить за N дней' : 'Remind days before'}
                   placeholder="3"
-                  placeholderTextColor="#666"
                   value={paymentRemindInput}
                   onChangeText={setPaymentRemindInput}
                   keyboardType="number-pad"
                   returnKeyType="next"
                 />
 
-                <Text style={styles.inputLabel}>{lang === 'ru' ? 'Комментарий для AI' : 'AI note'}</Text>
-                <TextInput
-                  style={[styles.modalInput, styles.multilineInput]}
+                <FormInput
+                  label={lang === 'ru' ? 'Комментарий для AI' : 'AI note'}
                   placeholder={lang === 'ru' ? 'Например: платить с company RUB, если не хватает - конвертировать USD' : 'Example: pay from company RUB; convert USD if short'}
-                  placeholderTextColor="#666"
                   value={paymentNoteInput}
                   onChangeText={setPaymentNoteInput}
                   multiline
@@ -935,21 +791,17 @@ export default function HomeScreen() {
               <Text style={styles.modalTitle}>
                 {goal ? t('editSavingGoal', lang) : t('setSavingGoal', lang)}
               </Text>
-              
-              <Text style={styles.inputLabel}>{t('goalNameLabel', lang)}</Text>
-              <TextInput
-                style={styles.modalInput}
+
+              <FormInput
+                label={t('goalNameLabel', lang)}
                 placeholder={t('goalNamePlaceholder', lang)}
-                placeholderTextColor="#666"
                 value={goalTitleInput}
                 onChangeText={setGoalTitleInput}
               />
 
-              <Text style={styles.inputLabel}>{t('targetAmountLabel', lang)}</Text>
-              <TextInput
-                style={styles.modalInput}
+              <FormInput
+                label={t('targetAmountLabel', lang)}
                 placeholder={t('targetAmountPlaceholder', lang)}
-                placeholderTextColor="#666"
                 value={goalTargetInput}
                 onChangeText={setGoalTargetInput}
                 keyboardType="numeric"
@@ -1173,180 +1025,169 @@ const styles = StyleSheet.create({
   button: { backgroundColor: colors.accent, padding: 16, borderRadius: radius.md, alignItems: 'center' },
   buttonText: { color: '#FFF', fontSize: fontSize.md, fontWeight: 'bold' },
 
-  // Modal styles (identical to AccountsScreen)
+  // Modal styles
   modalOverlay: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0, 0, 0, 0.75)'
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
   },
   modalContent: {
-    backgroundColor: '#1E1E1E',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 24,
-    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    padding: spacing(6),
+    paddingBottom: Platform.OS === 'ios' ? spacing(10) : spacing(6),
     borderWidth: 1,
-    borderColor: '#333'
+    borderColor: colors.border,
   },
   editorModalContent: {
-    maxHeight: '92%'
+    maxHeight: '92%',
   },
   editorScrollContent: {
-    paddingBottom: Platform.OS === 'ios' ? 140 : 96
+    paddingBottom: Platform.OS === 'ios' ? 140 : 96,
   },
   modalTitle: {
-    color: '#FFF',
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 16
+    color: colors.textPrimary,
+    fontSize: fontSize.lg,
+    fontWeight: '800',
+    marginBottom: spacing(4),
   },
   modalHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 16
+    marginBottom: spacing(4),
   },
   inputLabel: {
-    color: '#AAA',
-    fontSize: 13,
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
     fontWeight: '600',
-    marginBottom: 6
+    marginBottom: 6,
   },
   modalInput: {
-    backgroundColor: '#2A2A2A',
-    borderRadius: 8,
-    padding: 12,
-    color: '#FFF',
-    fontSize: 14,
-    marginBottom: 16,
+    backgroundColor: colors.surfaceInput,
+    borderRadius: radius.sm,
+    padding: spacing(3),
+    color: colors.textPrimary,
+    fontSize: fontSize.md,
+    marginBottom: spacing(4),
     borderWidth: 1,
-    borderColor: '#444'
+    borderColor: colors.border,
   },
   multilineInput: {
     minHeight: 78,
-    textAlignVertical: 'top'
+    textAlignVertical: 'top',
   },
   segmentedRow: {
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 16
+    marginBottom: spacing(4),
   },
   segmentButton: {
     flex: 1,
-    backgroundColor: '#2A2A2A',
-    borderRadius: 8,
+    backgroundColor: colors.surfaceInput,
+    borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: '#444',
-    paddingVertical: 10,
-    alignItems: 'center'
+    borderColor: colors.border,
+    paddingVertical: spacing(2.5),
+    alignItems: 'center',
   },
   segmentButtonActive: {
-    borderColor: '#4CAF50',
-    backgroundColor: 'rgba(76, 175, 80, 0.12)'
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSoft,
   },
   segmentButtonText: {
-    color: '#AAA',
-    fontSize: 12,
-    fontWeight: '700'
+    color: colors.textSecondary,
+    fontSize: fontSize.xs,
+    fontWeight: '700',
   },
   segmentButtonTextActive: {
-    color: '#4CAF50'
+    color: colors.accent,
   },
   twoColumnRow: {
     flexDirection: 'row',
-    gap: 10
+    gap: 10,
   },
   paymentList: {
     gap: 8,
-    marginBottom: 18
+    marginBottom: 18,
   },
   paymentRow: {
-    backgroundColor: '#252525',
-    borderRadius: 10,
+    backgroundColor: colors.surfaceAlt,
+    borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: '#333',
-    padding: 10,
+    borderColor: colors.border,
+    padding: spacing(3),
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10
+    gap: 10,
   },
   paymentRowTitle: {
-    color: '#FFF',
-    fontSize: 14,
+    color: colors.textPrimary,
+    fontSize: fontSize.sm,
     fontWeight: '700',
-    marginBottom: 3
+    marginBottom: 3,
   },
   paymentRowMeta: {
-    color: '#AAA',
-    fontSize: 12
+    color: colors.textSecondary,
+    fontSize: fontSize.xs,
   },
   paymentChevron: {
-    color: '#777',
+    color: colors.textMuted,
     fontSize: 24,
     fontWeight: '300',
-    paddingHorizontal: 4
-  },
-  deleteSmallButton: {
-    backgroundColor: '#3A2525',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 6
-  },
-  deleteSmallText: {
-    color: '#EF9A9A',
-    fontSize: 11,
-    fontWeight: '700'
+    paddingHorizontal: 4,
   },
   emptyText: {
-    color: '#888',
+    color: colors.textMuted,
     textAlign: 'center',
-    paddingVertical: 12
+    paddingVertical: 12,
   },
   accountPicker: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    marginBottom: 16
+    marginBottom: spacing(4),
   },
   accountChip: {
-    backgroundColor: '#2A2A2A',
+    backgroundColor: colors.surfaceInput,
     borderWidth: 1,
-    borderColor: '#444',
-    borderRadius: 999,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
     paddingHorizontal: 10,
-    paddingVertical: 7
+    paddingVertical: 7,
   },
   accountChipActive: {
-    borderColor: '#4CAF50',
-    backgroundColor: 'rgba(76, 175, 80, 0.12)'
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSoft,
   },
   accountChipText: {
-    color: '#AAA',
-    fontSize: 12,
-    fontWeight: '600'
+    color: colors.textSecondary,
+    fontSize: fontSize.xs,
+    fontWeight: '600',
   },
   accountChipTextActive: {
-    color: '#4CAF50'
+    color: colors.accent,
   },
   modalButtons: {
     flexDirection: 'row',
-    gap: 12,
-    marginTop: 8
+    gap: spacing(3),
+    marginTop: spacing(2),
   },
   modalButton: {
     flex: 1,
-    padding: 14,
-    borderRadius: 8,
-    alignItems: 'center'
+    padding: spacing(3.5),
+    borderRadius: radius.sm,
+    alignItems: 'center',
   },
   cancelButton: {
-    backgroundColor: '#333'
+    backgroundColor: colors.surfaceAlt,
   },
   saveButton: {
-    backgroundColor: '#4CAF50'
+    backgroundColor: colors.accent,
   },
   destructiveButton: {
-    backgroundColor: '#D32F2F',
-    marginBottom: 12
-  }
+    backgroundColor: colors.danger,
+    marginBottom: 12,
+  },
 });
