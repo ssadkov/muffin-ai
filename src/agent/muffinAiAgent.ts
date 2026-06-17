@@ -358,12 +358,110 @@ function buildPaymentCoverageAnswer(question: string, isRussian: boolean): strin
     : `There is payment coverage risk for ${scopeLabel} in the next ${summary.daysAhead} days.\n${paymentLines.join('\n')}\n\nDeficits:\n${deficitLines.join('\n')}`;
 }
 
+// Currency detection for deterministic exchange-rate / conversion answers.
+// Cyrillic aliases use plain substrings (\b is ASCII-only); ASCII codes use
+// word boundaries so short codes (sol, apt, eth) don't match inside words.
+const CURRENCY_PATTERNS: { code: string; re: RegExp }[] = [
+  { code: 'USD', re: /\$|\busd\b|\bdollars?\b|доллар|бакс/ },
+  { code: 'RUB', re: /₽|\brub\b|\brubles?\b|рубл|руб\b|руб\./ },
+  { code: 'KZT', re: /₸|\bkzt\b|\btenge\b|тенге|\bтг\b/ },
+  { code: 'EUR', re: /€|\beur\b|\beuros?\b|евро/ },
+  { code: 'BTC', re: /\bbtc\b|bitcoin|биткоин|биток/ },
+  { code: 'ETH', re: /\beth\b|ethereum|эфир/ },
+  { code: 'SOL', re: /\bsol\b|solana|солана/ },
+  { code: 'APT', re: /\bapt\b|aptos|аптос/ },
+];
+
+function detectCurrencies(text: string): string[] {
+  const hits: { code: string; idx: number }[] = [];
+  for (const { code, re } of CURRENCY_PATTERNS) {
+    const m = re.exec(text);
+    if (m) hits.push({ code, idx: m.index });
+  }
+  hits.sort((a, b) => a.idx - b.idx);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const h of hits) {
+    if (!seen.has(h.code)) { seen.add(h.code); out.push(h.code); }
+  }
+  return out;
+}
+
+function formatRateAmount(value: number, code: string): string {
+  if (code === 'USD') return `$${value.toFixed(value < 1 ? 4 : 2)}`;
+  return `${value.toLocaleString(undefined, { maximumFractionDigits: value < 1 ? 6 : 2 })} ${code}`;
+}
+
+/**
+ * Deterministic answer for "exchange rate" / currency-conversion questions
+ * (e.g. "RUB to USD", "rub exchange rate", "how much does USD cost in rub",
+ * "convert 100 eur to kzt"). Runs before account matching so currency codes
+ * are not mistaken for account names (e.g. the "Cash USD" account).
+ * Returns null when it isn't a rate question, letting the cascade continue.
+ */
+function answerExchangeRateQuestion(text: string): string | null {
+  // Balance intents (how much do I have / balance) are handled elsewhere.
+  const isBalanceIntent =
+    /\bbalance\b|\bhave\b|\bowe\b/.test(text) ||
+    text.includes('баланс') || text.includes('у меня') ||
+    text.includes('на счет') || text.includes('сколько у меня');
+  if (isBalanceIntent) return null;
+
+  const currencies = detectCurrencies(text);
+  if (currencies.length === 0) return null;
+
+  const hasRateWord =
+    /\bexchange\b|\brate\b|\bconvert\b|\bworth\b|\bcosts?\b/.test(text) ||
+    text.includes('курс') || text.includes('конверт') ||
+    text.includes('стоит') || text.includes('сколько будет');
+  const hasPairConnector =
+    /\bto\b|\bin\b/.test(text) || text.includes(' в ') || text.includes(' на ');
+
+  const rates = getRatesMap();
+  const rateToUsd = (code: string) => (code === 'USD' ? 1 : rates[code] || 0);
+
+  const amountMatch = text.match(/\d[\d\s.,]*\d|\d/);
+  const amount = amountMatch
+    ? parseFloat(amountMatch[0].replace(/\s/g, '').replace(',', '.'))
+    : null;
+
+  // Pair / conversion: two currencies + a connector or rate word.
+  if (currencies.length >= 2 && (hasRateWord || hasPairConnector)) {
+    const [from, to] = currencies;
+    const rFrom = rateToUsd(from);
+    const rTo = rateToUsd(to);
+    if (!rFrom || !rTo) return null; // no rate data — let the LLM try
+    const unit = rFrom / rTo;
+    if (amount && amount > 0) {
+      return `${amount.toLocaleString()} ${from} = ${formatRateAmount(amount * unit, to)}`;
+    }
+    return `1 ${from} = ${formatRateAmount(unit, to)}`;
+  }
+
+  // Single currency + explicit rate word: quote against USD.
+  if (currencies.length === 1 && hasRateWord) {
+    const code = currencies[0];
+    if (code === 'USD') return null;
+    const r = rateToUsd(code);
+    if (!r) return null;
+    if (amount && amount > 0) {
+      return `${amount.toLocaleString()} ${code} = ${formatRateAmount(amount * r, 'USD')}`;
+    }
+    return `1 ${code} = ${formatRateAmount(r, 'USD')}`;
+  }
+
+  return null;
+}
+
 function answerSimpleReadQuestion(question: string, accounts: ReturnType<typeof getLatestBalances>, isRussian: boolean): string | null {
   const text = normalizeQuestion(question);
 
   if (isPaymentQuestion(text)) {
     return buildPaymentCoverageAnswer(question, isRussian);
   }
+
+  const rateAnswer = answerExchangeRateQuestion(text);
+  if (rateAnswer) return rateAnswer;
 
   if (
     (isCompanyScopeQuestion(text) || isPersonalScopeQuestion(text)) &&
