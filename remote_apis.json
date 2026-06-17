@@ -11,19 +11,13 @@
     {
       "name": "CoinGecko API",
       "url": "https://api.coingecko.com/api/v3/simple/price",
-      "purpose": "Fetching real-time cryptocurrency price indices (e.g. BTC/USD)",
+      "purpose": "Fetching real-time cryptocurrency rates for asset valuations and BTC price queries (BTC, ETH, SOL, APT to USD)",
       "critical": false
     },
     {
       "name": "ExchangeRate-API",
       "url": "https://open.er-api.com/v6/latest/USD",
       "purpose": "Fetching real-time fiat exchange rates for local currency conversion (KZT, EUR, RUB to USD)",
-      "critical": false
-    },
-    {
-      "name": "CryptoCompare API",
-      "url": "https://min-api.cryptocompare.com/data/pricemulti",
-      "purpose": "Fetching real-time cryptocurrency rates for asset valuations (BTC, ETH, SOL, APT to USD)",
       "critical": false
     },
     {

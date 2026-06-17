@@ -40,7 +40,7 @@ import {
   OwnerType
 } from '../tools/databaseTools';
 import { checkMoneyRules } from '../tools/rulesTools';
-import { fetchAndUpdateRates, getLastRatesUpdate } from '../services/exchangeRateService';
+import { fetchAndUpdateRates, getLastRatesUpdate, areRatesStale } from '../services/exchangeRateService';
 import { exportAuditLogs, clearAuditLogs } from '../services/inferenceLogService';
 import { syncPublicWallets } from '../services/walletSyncService';
 import { schedulePaymentReminders } from '../services/paymentReminderService';
@@ -104,11 +104,18 @@ export default function HomeScreen() {
   useEffect(() => {
     if (isFocused) {
       refreshData();
-      // Sync public wallets and exchange accounts in the background when the screen is focused
-      Promise.all([
+      // Refresh live FX/crypto rates (throttled) + sync wallets/exchanges in the
+      // background when the screen is focused, then re-read the DB.
+      const tasks: Promise<unknown>[] = [
         syncPublicWallets(),
-        syncAllExchanges()
-      ])
+        syncAllExchanges(),
+      ];
+      // Only hit the rate APIs if our cached rates are stale, so switching
+      // tabs doesn't spam the public endpoints (cryptocompare rate-limits).
+      if (areRatesStale()) {
+        tasks.unshift(fetchAndUpdateRates());
+      }
+      Promise.all(tasks)
         .then(() => {
           refreshData();
           schedulePaymentReminders();
