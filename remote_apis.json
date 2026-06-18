@@ -4,10 +4,33 @@
     {
       "name": "Hugging Face Qwen Model Download",
       "url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
-      "purpose": "Downloading the local GGUF model for on-device financial inference and RAG",
+      "purpose": "One-time download of the local GGUF model for QVAC on-device financial inference",
       "critical": true
     },
-
+    {
+      "name": "Hugging Face Whisper Model Download",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+      "purpose": "One-time download of the local Whisper model used by QVAC on-device speech transcription",
+      "critical": true
+    },
+    {
+      "name": "QVAC OCR Recognizer Registry Model",
+      "url": "registry://s3/qvac_models_compiled/ocr/2026-02-12/rec_dyn/recognizer_cyrillic.onnx",
+      "purpose": "QVAC model registry reference for the on-device Cyrillic/English OCR recognizer",
+      "critical": true
+    },
+    {
+      "name": "QVAC OCR Detector Registry Model",
+      "url": "registry://s3/qvac_models_compiled/ocr/2026-02-12/rec_512/detector_craft.onnx",
+      "purpose": "QVAC model registry reference for the on-device OCR detector",
+      "critical": true
+    },
+    {
+      "name": "Expo Updates",
+      "url": "https://u.expo.dev/af00c345-5a34-4c3d-b0b9-a279d268db8f",
+      "purpose": "Optional non-AI over-the-air JavaScript and asset updates for compatible native builds",
+      "critical": false
+    },
     {
       "name": "CoinGecko API",
       "url": "https://api.coingecko.com/api/v3/simple/price",
@@ -21,15 +44,15 @@
       "critical": false
     },
     {
-      "name": "Solana RPC Provider Mainnet",
-      "url": "https://api.mainnet-beta.solana.com",
-      "purpose": "Fetching mainnet public wallet token and native balances",
+      "name": "Yield AI Public Wallet Balance API",
+      "url": "https://yieldai.app/api/public/v1/wallet/{address}/balance",
+      "purpose": "Fetching public wallet token balances for user-entered Solana/Aptos wallet addresses using a disclosed non-AI portfolio service",
       "critical": false
     },
     {
-      "name": "Aptos RPC Provider Mainnet",
-      "url": "https://fullnode.mainnet.aptoslabs.com",
-      "purpose": "Fetching mainnet public wallet token and native balances",
+      "name": "Yield AI Public Wallet Protocols API",
+      "url": "https://yieldai.app/api/public/v1/wallet/{address}/protocols",
+      "purpose": "Fetching public DeFi protocol positions for user-entered Solana/Aptos wallet addresses using a disclosed non-AI portfolio service",
       "critical": false
     },
     {

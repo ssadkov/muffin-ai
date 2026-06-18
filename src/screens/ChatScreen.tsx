@@ -22,6 +22,7 @@ import StatusChip from '../components/StatusChip';
 import TypingDots from '../components/TypingDots';
 import ThinkingBox from '../components/ThinkingBox';
 import { askMuffinAi, continueMuffinAi } from '../agent/muffinAiAgent';
+import { extractBalanceAccountNameHint, findMatchingAccount, parseFinanceCommand } from '../agent/commandParser';
 import { downloadModelIfNeeded, initLocalModel, checkModelExists, isModelLoaded, InferenceStats } from '../services/qvacService';
 import { recognizeImageText, parseBalanceFromOcrText } from '../services/ocrService';
 import { upsertAccountBalance, executeBalanceUpdate, getLatestBalances, updateGoal, getSetting } from '../tools/databaseTools';
@@ -46,22 +47,44 @@ interface Message {
   };
   // Tool call state
   isToolCall?: boolean;
-  toolCallType?: 'BTC_PRICE' | 'UPDATE_BALANCE' | 'UPDATE_GOAL';
+  toolCallType?: 'BTC_PRICE' | 'CREATE_ACCOUNT' | 'UPDATE_BALANCE' | 'UPDATE_GOAL';
   toolCallData?: any;
   toolCallStatus?: 'pending' | 'running' | 'completed' | 'cancelled';
   countdown?: number;
   rawToolCallText?: string;
   isToolConfirmation?: boolean;
+  sourceQuestion?: string;
   // QVAC on-device inference telemetry, shown as a badge under the answer.
   stats?: InferenceStats;
 }
 
 const TOOL_COUNTDOWN_SECONDS = 5;
 
-type ToolType = 'BTC_PRICE' | 'UPDATE_BALANCE' | 'UPDATE_GOAL';
+type ToolType = 'BTC_PRICE' | 'CREATE_ACCOUNT' | 'UPDATE_BALANCE' | 'UPDATE_GOAL';
+
+type ResolvedBalanceMutation =
+  | {
+      action: 'update';
+      data: {
+        accountId: string;
+        amount: number;
+        currency: string;
+        type: 'add' | 'subtract' | 'set';
+        accountName?: string;
+      };
+    }
+  | {
+      action: 'create';
+      data: {
+        accountName: string;
+        amount: number;
+        currency: string;
+      };
+    };
 
 const TOOL_META: Record<ToolType, { icon: keyof typeof Ionicons.glyphMap; color: string; soft: string }> = {
   BTC_PRICE: { icon: 'logo-bitcoin', color: '#F7931A', soft: 'rgba(247, 147, 26, 0.14)' },
+  CREATE_ACCOUNT: { icon: 'add-circle-outline', color: colors.info, soft: colors.infoSoft },
   UPDATE_BALANCE: { icon: 'wallet-outline', color: colors.accent, soft: colors.accentSoft },
   UPDATE_GOAL: { icon: 'flag-outline', color: colors.info, soft: colors.infoSoft },
 };
@@ -128,6 +151,9 @@ export default function ChatScreen() {
     if (!response) return '';
     const cleanResponse = response.trim();
     if (cleanResponse.startsWith('[')) {
+      if (cleanResponse.includes('CREATE_ACCOUNT')) {
+        return t('toolCreateAccountIntro', lang);
+      }
       if (cleanResponse.includes('UPDATE_BALANCE')) {
         return t('toolBalanceIntro', lang);
       }
@@ -293,6 +319,104 @@ export default function ChatScreen() {
     }));
   };
 
+  const resolveBalanceMutation = (userQuestion: string, data: any): ResolvedBalanceMutation => {
+    const accounts = getLatestBalances();
+    const amount = Number(data?.amount);
+    const currency = String(data?.currency || 'USD').toUpperCase();
+    const operation = data?.type === 'add' || data?.type === 'subtract' || data?.type === 'set'
+      ? data.type
+      : 'set';
+
+    if (!Number.isFinite(amount) || amount < 0) {
+      throw new Error('Invalid balance amount');
+    }
+
+    const question = (userQuestion || '').trim();
+    if (question) {
+      const parsed = parseFinanceCommand(question, accounts);
+      if (parsed?.action === 'create_account') {
+        return {
+          action: 'create',
+          data: {
+            accountName: parsed.name,
+            amount,
+            currency,
+          },
+        };
+      }
+
+      if (parsed?.action === 'update_balance') {
+        const account = accounts.find((item) => item.id === parsed.accountId);
+        if (account) {
+          return {
+            action: 'update',
+            data: {
+              accountId: account.id,
+              accountName: account.name,
+              amount,
+              currency,
+              type: operation,
+            },
+          };
+        }
+      }
+
+      const accountMatch = findMatchingAccount(question, accounts);
+      if (accountMatch.account && accountMatch.confidence >= 0.78) {
+        return {
+          action: 'update',
+          data: {
+            accountId: accountMatch.account.id,
+            accountName: accountMatch.account.name,
+            amount,
+            currency,
+            type: operation,
+          },
+        };
+      }
+
+      const accountNameHint = extractBalanceAccountNameHint(question);
+      if (accountNameHint) {
+        return {
+          action: 'create',
+          data: {
+            accountName: accountNameHint,
+            amount,
+            currency,
+          },
+        };
+      }
+    }
+
+    const proposedAccount = accounts.find((item) => item.id === data?.accountId);
+    if (proposedAccount) {
+      return {
+        action: 'update',
+        data: {
+          accountId: proposedAccount.id,
+          accountName: proposedAccount.name,
+          amount,
+          currency,
+          type: operation,
+        },
+      };
+    }
+
+    const proposedAccountName = String(data?.accountName || '').trim();
+    if (proposedAccountName) {
+      return {
+        action: 'create',
+        data: {
+          accountName: proposedAccountName,
+          amount,
+          currency,
+        },
+      };
+    }
+
+    throw new Error('Could not resolve balance target account');
+  };
+
   const processVoiceCommand = async (uri: string) => {
     setIsLoading(true);
     const transLoadingId = Date.now().toString();
@@ -415,8 +539,9 @@ export default function ChatScreen() {
         isToolCall: true,
         toolCallType: 'BTC_PRICE',
         toolCallStatus: 'pending',
-        countdown: 5,
+        countdown: TOOL_COUNTDOWN_SECONDS,
         rawToolCallText: aiText,
+        sourceQuestion: userQuestion,
         stats
       };
       setMessages(prev => {
@@ -425,24 +550,113 @@ export default function ChatScreen() {
       });
       startToolCountdown(msgId, userQuestion, 'BTC_PRICE', null);
     } 
+    else if (aiText.includes('TOOL_CALL: CREATE_ACCOUNT:')) {
+      const match = aiText.match(/\[?TOOL_CALL: CREATE_ACCOUNT:\s*(\{.*?\})\]?/);
+      if (match) {
+        try {
+          const parsedToolData = JSON.parse(match[1]);
+          const toolData = {
+            accountName: String(parsedToolData.accountName || parsedToolData.name || '').trim(),
+            amount: Number(parsedToolData.amount),
+            currency: String(parsedToolData.currency || 'USD').toUpperCase(),
+          };
+          if (!toolData.accountName || !Number.isFinite(toolData.amount) || toolData.amount < 0) {
+            throw new Error('Invalid CREATE_ACCOUNT payload');
+          }
+
+          const msgId = Date.now().toString();
+          const newMsg: Message = {
+            id: msgId,
+            text: t('toolCreateAccount', lang, { accountName: toolData.accountName, amount: toolData.amount, currency: toolData.currency }),
+            isUser: false,
+            isToolCall: true,
+            toolCallType: 'CREATE_ACCOUNT',
+            toolCallData: toolData,
+            toolCallStatus: 'pending',
+            countdown: TOOL_COUNTDOWN_SECONDS,
+            rawToolCallText: aiText,
+            sourceQuestion: userQuestion,
+            stats
+          };
+
+          setMessages(prev => {
+            const updated = prev.map(m => {
+              if (m.id === aiMsgId) {
+                return { ...m, text: t('toolCreateAccountIntro', lang), isToolConfirmation: true };
+              }
+              return m;
+            });
+            return [...updated, newMsg];
+          });
+
+          startToolCountdown(msgId, userQuestion, 'CREATE_ACCOUNT', toolData);
+        } catch (e) {
+          console.error("Failed to parse create account tool call JSON", e);
+          if (aiMsgId) {
+            setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, text: aiText } : m));
+          } else {
+            setMessages(prev => [...prev, { id: Date.now().toString(), text: aiText, isUser: false }]);
+          }
+        }
+      } else {
+        if (aiMsgId) {
+          setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, text: aiText } : m));
+        } else {
+          setMessages(prev => [...prev, { id: Date.now().toString(), text: aiText, isUser: false }]);
+        }
+      }
+    }
     else if (aiText.includes('TOOL_CALL: UPDATE_BALANCE:')) {
       const match = aiText.match(/\[?TOOL_CALL: UPDATE_BALANCE:\s*(\{.*?\})\]?/);
       if (match) {
         try {
           const toolData = JSON.parse(match[1]);
           const msgId = Date.now().toString();
-          
-          const accounts = getLatestBalances();
-          const account = accounts.find(a => a.id === toolData.accountId);
-          const accountName = account ? account.name : toolData.accountId;
+
+          const resolvedMutation = resolveBalanceMutation(userQuestion, toolData);
+          if (resolvedMutation.action === 'create') {
+            const newMsg: Message = {
+              id: msgId,
+              text: t('toolCreateAccount', lang, {
+                accountName: resolvedMutation.data.accountName,
+                amount: resolvedMutation.data.amount,
+                currency: resolvedMutation.data.currency,
+              }),
+              isUser: false,
+              isToolCall: true,
+              toolCallType: 'CREATE_ACCOUNT',
+              toolCallData: resolvedMutation.data,
+              toolCallStatus: 'pending',
+              countdown: TOOL_COUNTDOWN_SECONDS,
+              rawToolCallText: aiText,
+              sourceQuestion: userQuestion,
+              stats
+            };
+
+            setMessages(prev => {
+              const updated = prev.map(m => {
+                if (m.id === aiMsgId) {
+                  return { ...m, text: t('toolCreateAccountIntro', lang), isToolConfirmation: true };
+                }
+                return m;
+              });
+              return [...updated, newMsg];
+            });
+
+            startToolCountdown(msgId, userQuestion, 'CREATE_ACCOUNT', resolvedMutation.data);
+            return;
+          }
+
+          const resolvedToolData = resolvedMutation.data;
+          const accountName = resolvedToolData.accountName || resolvedToolData.accountId;
 
           let opText = '';
-          if (toolData.type === 'add') {
-            opText = t('toolAddBalance', lang, { amount: toolData.amount, currency: toolData.currency, accountName });
-          } else if (toolData.type === 'subtract') {
-            opText = t('toolSubtractBalance', lang, { amount: toolData.amount, currency: toolData.currency, accountName });
+          if (resolvedToolData.type === 'add') {
+            opText = t('toolAddBalance', lang, { amount: resolvedToolData.amount, currency: resolvedToolData.currency, accountName });
+          } else if (resolvedToolData.type === 'subtract') {
+            opText = t('toolSubtractBalance', lang, { amount: resolvedToolData.amount, currency: resolvedToolData.currency, accountName });
           } else {
-            opText = t('toolSetBalance', lang, { amount: toolData.amount, currency: toolData.currency, accountName });
+            opText = t('toolSetBalance', lang, { amount: resolvedToolData.amount, currency: resolvedToolData.currency, accountName });
           }
 
           const newMsg: Message = {
@@ -451,10 +665,11 @@ export default function ChatScreen() {
             isUser: false,
             isToolCall: true,
             toolCallType: 'UPDATE_BALANCE',
-            toolCallData: { ...toolData, accountName },
+            toolCallData: { ...resolvedToolData, accountName },
             toolCallStatus: 'pending',
-            countdown: 5,
+            countdown: TOOL_COUNTDOWN_SECONDS,
             rawToolCallText: aiText,
+            sourceQuestion: userQuestion,
             stats
           };
 
@@ -468,7 +683,7 @@ export default function ChatScreen() {
             return [...updated, newMsg];
           });
 
-          startToolCountdown(msgId, userQuestion, 'UPDATE_BALANCE', toolData);
+          startToolCountdown(msgId, userQuestion, 'UPDATE_BALANCE', resolvedToolData);
         } catch (e) {
           console.error("Failed to parse tool call JSON", e);
           if (aiMsgId) {
@@ -500,8 +715,9 @@ export default function ChatScreen() {
             toolCallType: 'UPDATE_GOAL',
             toolCallData: toolData,
             toolCallStatus: 'pending',
-            countdown: 5,
+            countdown: TOOL_COUNTDOWN_SECONDS,
             rawToolCallText: aiText,
+            sourceQuestion: userQuestion,
             stats
           };
 
@@ -545,8 +761,8 @@ export default function ChatScreen() {
     }, 150);
   };
 
-  const startToolCountdown = (msgId: string, userQuestion: string, type: 'BTC_PRICE' | 'UPDATE_BALANCE' | 'UPDATE_GOAL', data: any) => {
-    let timeLeft = 5;
+  const startToolCountdown = (msgId: string, userQuestion: string, type: ToolType, data: any) => {
+    let timeLeft = TOOL_COUNTDOWN_SECONDS;
     
     const intervalId = setInterval(() => {
       timeLeft -= 1;
@@ -631,7 +847,7 @@ export default function ChatScreen() {
   };
 
   const buildSuccessMessage = (
-    type: 'BTC_PRICE' | 'UPDATE_BALANCE' | 'UPDATE_GOAL',
+    type: ToolType,
     data: any,
     result: any
   ) => {
@@ -654,12 +870,18 @@ export default function ChatScreen() {
         : `Done: ${operationText} ${formatNumber(data.amount)} ${data.currency}.\nNew ${result.accountName} balance: ${formatNumber(result.newAmount)} ${result.currency} (≈ $${formatNumber(result.newUsdValue)}).`;
     }
 
+    if (type === 'CREATE_ACCOUNT') {
+      return lang === 'ru'
+        ? `Готово: создан счет ${result.accountName} с балансом ${formatNumber(result.amount)} ${result.currency} (≈ $${formatNumber(result.usdValue)}).`
+        : `Done: created ${result.accountName} with ${formatNumber(result.amount)} ${result.currency} (≈ $${formatNumber(result.usdValue)}).`;
+    }
+
     return lang === 'ru'
       ? `Готово. Цель обновлена: ${result.title}, ${formatNumber(result.targetValue)} ${result.currency}.`
       : `Done. Goal updated: ${result.title}, ${formatNumber(result.targetValue)} ${result.currency}.`;
   };
 
-  const executeToolAction = async (msgId: string, userQuestion: string, type: 'BTC_PRICE' | 'UPDATE_BALANCE' | 'UPDATE_GOAL', data: any) => {
+  const executeToolAction = async (msgId: string, userQuestion: string, type: ToolType, data: any) => {
     setMessages(prev => prev.map(m => {
       if (m.id === msgId) {
         return { ...m, toolCallStatus: 'running' };
@@ -670,12 +892,57 @@ export default function ChatScreen() {
     setIsLoading(true);
     try {
       let result: any = null;
+      let effectiveType: ToolType = type;
+      let effectiveData = data;
       if (type === 'BTC_PRICE') {
         const price = await getBitcoinPrice();
         result = { price };
       } 
       else if (type === 'UPDATE_BALANCE') {
-        result = executeBalanceUpdate(data.accountId, data.amount, data.currency, data.type);
+        const resolvedMutation = resolveBalanceMutation(userQuestion, data);
+        if (resolvedMutation.action === 'create') {
+          effectiveType = 'CREATE_ACCOUNT';
+          effectiveData = resolvedMutation.data;
+          const saved = upsertAccountBalance(
+            resolvedMutation.data.accountName,
+            resolvedMutation.data.amount,
+            resolvedMutation.data.currency,
+            undefined,
+            undefined,
+            'manual'
+          );
+          result = {
+            accountName: resolvedMutation.data.accountName,
+            amount: resolvedMutation.data.amount,
+            currency: resolvedMutation.data.currency,
+            usdValue: saved.usdValue,
+          };
+          setExistingAccounts(getLatestBalances());
+        } else {
+          effectiveData = resolvedMutation.data;
+          result = executeBalanceUpdate(
+            resolvedMutation.data.accountId,
+            resolvedMutation.data.amount,
+            resolvedMutation.data.currency,
+            resolvedMutation.data.type
+          );
+        }
+      }
+      else if (type === 'CREATE_ACCOUNT') {
+        const accountName = String(data.accountName || '').trim();
+        const amount = Number(data.amount);
+        const currency = String(data.currency || 'USD').toUpperCase();
+        if (!accountName || !Number.isFinite(amount) || amount < 0) {
+          throw new Error('Invalid account name or amount');
+        }
+        const saved = upsertAccountBalance(accountName, amount, currency, undefined, undefined, 'manual');
+        result = {
+          accountName,
+          amount,
+          currency,
+          usdValue: saved.usdValue,
+        };
+        setExistingAccounts(getLatestBalances());
       }
       else if (type === 'UPDATE_GOAL') {
         result = updateGoal(data.targetValue, data.title, data.currency);
@@ -690,7 +957,7 @@ export default function ChatScreen() {
 
       setMessages(prev => [...prev, { 
         id: 'ai_' + Date.now(), 
-        text: buildSuccessMessage(type, data, result), 
+        text: buildSuccessMessage(effectiveType, effectiveData, result),
         isUser: false,
         isToolConfirmation: true
       }]);
@@ -920,6 +1187,13 @@ export default function ChatScreen() {
     if (item.toolCallType === 'UPDATE_GOAL' && item.toolCallData) {
       return t('toolUpdateGoal', lang, { title: item.toolCallData.title, targetValue: item.toolCallData.targetValue.toLocaleString() });
     }
+    if (item.toolCallType === 'CREATE_ACCOUNT' && item.toolCallData) {
+      return t('toolCreateAccount', lang, {
+        accountName: item.toolCallData.accountName,
+        amount: item.toolCallData.amount,
+        currency: item.toolCallData.currency || 'USD',
+      });
+    }
     return item.text;
   };
 
@@ -983,7 +1257,9 @@ export default function ChatScreen() {
                   ? t('cryptoQuery', lang)
                   : item.toolCallType === 'UPDATE_GOAL'
                     ? t('goalUpdate', lang)
-                    : t('balanceAction', lang)}
+                    : item.toolCallType === 'CREATE_ACCOUNT'
+                      ? t('createAccountAction', lang)
+                      : t('balanceAction', lang)}
               </Text>
               {statusChip && (
                 <View style={styles.toolHeaderChip}>
@@ -1008,10 +1284,104 @@ export default function ChatScreen() {
                   </Text>
                   <TouchableOpacity
                     style={styles.toolCancelButton}
-                    onPress={() => cancelToolCall(item.id, messages[messages.length - 2]?.text || '', item.toolCallType || '')}
+                    onPress={() => cancelToolCall(item.id, item.sourceQuestion || messages[messages.length - 2]?.text || '', item.toolCallType || '')}
                   >
                     <Ionicons name="close" size={13} color="#FFF" />
                     <Text style={styles.toolCancelText}>{t('cancel', lang)}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {item.toolCallType === 'CREATE_ACCOUNT' && item.toolCallStatus === 'pending' && item.toolCallData && (
+              <View style={styles.ocrEditContainer}>
+                <Text style={styles.ocrSectionTitle}>{t('accountLabel', lang)}</Text>
+                <TextInput
+                  style={styles.ocrTextInput}
+                  value={String(item.toolCallData.accountName || '')}
+                  onChangeText={(text) => {
+                    stopTimer(item.id);
+                    setMessages(prev => prev.map(m => {
+                      if (m.id === item.id && m.toolCallData) {
+                        return {
+                          ...m,
+                          countdown: undefined,
+                          toolCallData: {
+                            ...m.toolCallData,
+                            accountName: text
+                          }
+                        };
+                      }
+                      return m;
+                    }));
+                  }}
+                />
+
+                <Text style={styles.ocrSectionTitle}>{t('amountLabel', lang)}</Text>
+                <TextInput
+                  style={styles.ocrTextInput}
+                  value={String(item.toolCallData.amount)}
+                  keyboardType="numeric"
+                  onChangeText={(text) => {
+                    stopTimer(item.id);
+                    const val = parseFloat(text) || 0;
+                    setMessages(prev => prev.map(m => {
+                      if (m.id === item.id && m.toolCallData) {
+                        return {
+                          ...m,
+                          countdown: undefined,
+                          toolCallData: {
+                            ...m.toolCallData,
+                            amount: val
+                          }
+                        };
+                      }
+                      return m;
+                    }));
+                  }}
+                />
+
+                <Text style={styles.ocrSectionTitle}>{t('currencyLabel', lang)}</Text>
+                <TextInput
+                  style={styles.ocrTextInput}
+                  value={String(item.toolCallData.currency || 'USD')}
+                  autoCapitalize="characters"
+                  onChangeText={(text) => {
+                    stopTimer(item.id);
+                    setMessages(prev => prev.map(m => {
+                      if (m.id === item.id && m.toolCallData) {
+                        return {
+                          ...m,
+                          countdown: undefined,
+                          toolCallData: {
+                            ...m.toolCallData,
+                            currency: text.toUpperCase()
+                          }
+                        };
+                      }
+                      return m;
+                    }));
+                  }}
+                />
+
+                <View style={styles.confirmButtonsContainer}>
+                  <TouchableOpacity
+                    style={[styles.confirmButton, styles.yesButton]}
+                    onPress={() => {
+                      stopTimer(item.id);
+                      executeToolAction(item.id, item.sourceQuestion || messages[messages.length - 2]?.text || '', 'CREATE_ACCOUNT', item.toolCallData);
+                    }}
+                  >
+                    <Text style={styles.confirmButtonText}>{t('confirmButton', lang)}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.confirmButton, styles.noButton]}
+                    onPress={() => {
+                      stopTimer(item.id);
+                      cancelToolCall(item.id, item.sourceQuestion || messages[messages.length - 2]?.text || '', 'CREATE_ACCOUNT');
+                    }}
+                  >
+                    <Text style={styles.confirmButtonText}>{t('cancel', lang)}</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -1120,7 +1490,7 @@ export default function ChatScreen() {
                     style={[styles.confirmButton, styles.yesButton]} 
                     onPress={() => {
                       stopTimer(item.id);
-                      executeToolAction(item.id, messages[messages.length - 2]?.text || '', 'UPDATE_BALANCE', item.toolCallData);
+                      executeToolAction(item.id, item.sourceQuestion || messages[messages.length - 2]?.text || '', 'UPDATE_BALANCE', item.toolCallData);
                     }}
                   >
                     <Text style={styles.confirmButtonText}>{t('confirmButton', lang)}</Text>
@@ -1129,7 +1499,7 @@ export default function ChatScreen() {
                     style={[styles.confirmButton, styles.noButton]} 
                     onPress={() => {
                       stopTimer(item.id);
-                      cancelToolCall(item.id, messages[messages.length - 2]?.text || '', 'UPDATE_BALANCE');
+                      cancelToolCall(item.id, item.sourceQuestion || messages[messages.length - 2]?.text || '', 'UPDATE_BALANCE');
                     }}
                   >
                     <Text style={styles.confirmButtonText}>{t('cancel', lang)}</Text>
@@ -1191,7 +1561,7 @@ export default function ChatScreen() {
                     style={[styles.confirmButton, styles.yesButton]} 
                     onPress={() => {
                       stopTimer(item.id);
-                      executeToolAction(item.id, messages[messages.length - 2]?.text || '', 'UPDATE_GOAL', item.toolCallData);
+                      executeToolAction(item.id, item.sourceQuestion || messages[messages.length - 2]?.text || '', 'UPDATE_GOAL', item.toolCallData);
                     }}
                   >
                     <Text style={styles.confirmButtonText}>{t('confirmButton', lang)}</Text>
@@ -1200,7 +1570,7 @@ export default function ChatScreen() {
                     style={[styles.confirmButton, styles.noButton]} 
                     onPress={() => {
                       stopTimer(item.id);
-                      cancelToolCall(item.id, messages[messages.length - 2]?.text || '', 'UPDATE_GOAL');
+                      cancelToolCall(item.id, item.sourceQuestion || messages[messages.length - 2]?.text || '', 'UPDATE_GOAL');
                     }}
                   >
                     <Text style={styles.confirmButtonText}>{t('cancel', lang)}</Text>

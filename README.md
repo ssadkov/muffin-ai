@@ -22,7 +22,7 @@ QVAC Local Agent (Local LLM & OCR)
         |
         +--> SecureStore (Local API Keys Ref)
         |
-        +--> Public Blockchain RPC (Solana, Aptos mainnets)
+        +--> Disclosed non-AI APIs (rates, read-only exchange balances, public wallet portfolio data)
         |
         +--> Screenshot OCR & Parser Service
         |
@@ -128,10 +128,13 @@ Runtime compatibility is controlled by `runtimeVersion.policy = appVersion`, so 
 
 Muffin AI includes all required items for the QVAC 3-stage validation process:
 
-1. **Remote API Call Registry ([remote_apis.json](file:///c:/work/muffin-ai/remote_apis.json)):** Discloses all remote endpoints (fiat/crypto exchange rates, model downloads, and public blockchain RPC nodes) for audit.
+1. **Remote API Call Registry ([remote_apis.json](remote_apis.json)):** Discloses all remote endpoints (fiat/crypto exchange rates, model downloads, Expo Updates, QVAC model registry references, read-only exchange APIs, and public wallet portfolio APIs) for audit.
 2. **Auditable Inference Logs:** Every model load and chat inference (prompts, responses, tokens, Time to First Token - TTFT, and tokens/sec speed) is captured on-device in a structured audit log.
 3. **Log Exporter UI:** Developers can export the live audit log directly from the bottom of the **Home Screen** (via the *Export Audit Logs* button).
 4. **Sample Audit Log ([inference_audit_log.json](inference_audit_log.json)):** A real captured demo run is committed at the root of the repository, covering model loads, screenshot OCR parsing, tool-call classification, financial Q&A, a cancellation flow, and OCR-confirmation replies — each with `tokenCount`, `ttftMs`, `generationTimeMs`, and `tokensPerSec`. Regenerate a fresh one any time via the **Export Audit Logs** button on the Home Screen.
+5. **Submission Packet ([SUBMISSION.md](SUBMISSION.md)):** Collects tracks, repository, video, prior-work disclosure, hardware evidence requirements, and a demo script for DoraHacks review.
+
+Current placeholder demo video: https://youtu.be/XZxL72rn7qE. This will be replaced with a final unlisted recording before the DoraHacks submission is finalized.
 
 ---
 
@@ -147,16 +150,18 @@ The app is runnable out of the box on the declared hardware by following the **L
 
 | Spec | Value |
 |------|-------|
-| Device | _e.g. iPhone 17_ |
-| Chip / CPU+GPU | _e.g. Apple A19_ |
-| RAM | _e.g. 8 GB_ |
-| Storage | _e.g. 256 GB_ |
-| OS | _e.g. iOS 26_ |
-| Inference backend | GPU (Metal), `gpu_layers: 99`, `ctx_size: 8192` |
+| Device | Pending final demo recording |
+| Chip / CPU+GPU | Pending final demo recording |
+| RAM | Pending final demo recording |
+| Storage | Pending final demo recording |
+| OS | Pending final demo recording |
+| Inference backend | QVAC local inference; GPU intended where available, `gpu_layers: 99`, `ctx_size: 8192` |
 
-> **TODO before submission:** replace the values above with the exact specs of the demo device and attach **system-profiler screenshots** (iOS: Settings → General → About; or Xcode device info) to the submission.
+Final submission hardware evidence must match the recorded demo device. Add screenshots from iOS Settings -> General -> About, Android Settings -> About phone, or the host system profiler if the General Purpose track is evaluated through an emulator/simulator.
 
 Observed performance on-device (from the committed audit log): generation ~22–30 tokens/sec, TTFT ~1–5 s on a warm model; KV-cache reuse reduces TTFT on follow-up turns in the same conversation.
+
+The standard demo keeps the QVAC model resident after loading, so the committed sample audit log does not include a `model_unload` event. If the final demo adds explicit unload/reload behavior, export a fresh log that includes it.
 
 ---
 

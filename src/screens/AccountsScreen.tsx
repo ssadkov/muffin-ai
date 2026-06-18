@@ -34,6 +34,7 @@ import {
   getSetting,
   updateAccountMetadata,
   updateAccountName,
+  executeBalanceUpdate,
   OwnerType
 } from '../tools/databaseTools';
 import { testBybitConnection } from '../services/bybitService';
@@ -118,12 +119,14 @@ export default function AccountsScreen() {
   const [addressInput, setAddressInput] = useState('');
   const [ownerTypeInput, setOwnerTypeInput] = useState<OwnerType>('personal');
   const [ownershipInput, setOwnershipInput] = useState('100');
+  const [balanceAmountInput, setBalanceAmountInput] = useState('');
   const [currencyInput, setCurrencyInput] = useState('USD');
   const [modelNoteInput, setModelNoteInput] = useState('');
 
   useEffect(() => {
     if (isFocused) {
       setLang(getSetting('language', 'ru') as Language);
+      setAccounts(getLatestBalances());
     }
   }, [isFocused]);
 
@@ -150,16 +153,13 @@ export default function AccountsScreen() {
   const [historyAccount, setHistoryAccount] = useState<any>(null);
   const [historyData, setHistoryData] = useState<any[]>([]);
 
-  useEffect(() => {
-    setAccounts(getLatestBalances());
-  }, []);
-
   const openEditModal = (account: any) => {
     setSelectedAccount(account);
     setAccountNameInput(account.name || '');
     setAddressInput(account.address || '');
     setOwnerTypeInput((account.owner_type === 'company' ? 'company' : 'personal') as OwnerType);
     setOwnershipInput(String(account.ownership_percent || 100));
+    setBalanceAmountInput(String(account.amount ?? 0));
     setCurrencyInput(account.currency || 'USD');
     setModelNoteInput(account.model_note || '');
     setIsEditModalVisible(true);
@@ -178,11 +178,22 @@ export default function AccountsScreen() {
     const trimmedName = accountNameInput.trim();
     const trimmedAddress = addressInput.trim();
     const parsedOwnership = parseFloat(ownershipInput);
+    const normalizedBalanceInput = balanceAmountInput.replace(',', '.').trim();
+    const parsedBalanceAmount = Number(normalizedBalanceInput);
+    const normalizedCurrency = currencyInput.trim().toUpperCase() || 'USD';
 
     if (!trimmedName) {
       Alert.alert(
         t('validationGoalTitle', lang),
         lang === 'ru' ? 'Пожалуйста, введите название счета.' : 'Please enter an account name.'
+      );
+      return;
+    }
+
+    if (!normalizedBalanceInput || !Number.isFinite(parsedBalanceAmount) || parsedBalanceAmount < 0) {
+      Alert.alert(
+        t('validationGoalTitle', lang),
+        lang === 'ru' ? 'Пожалуйста, введите корректную сумму баланса.' : 'Please enter a valid balance amount.'
       );
       return;
     }
@@ -195,9 +206,17 @@ export default function AccountsScreen() {
         ownerTypeInput,
         Number.isFinite(parsedOwnership) ? parsedOwnership : 100,
         modelNoteInput,
-        currencyInput,
+        normalizedCurrency,
         trimmedAddress
       );
+
+      const previousAmount = Number(selectedAccount.amount ?? 0);
+      const previousCurrency = String(selectedAccount.currency || 'USD').toUpperCase();
+      const didBalanceChange = Math.abs(parsedBalanceAmount - previousAmount) > 0.00000001;
+      const didCurrencyChange = normalizedCurrency !== previousCurrency;
+      if (didBalanceChange || didCurrencyChange) {
+        executeBalanceUpdate(selectedAccount.id, parsedBalanceAmount, normalizedCurrency, 'set');
+      }
       
       // Refresh state
       setAccounts(getLatestBalances());
@@ -207,6 +226,7 @@ export default function AccountsScreen() {
       setAccountNameInput('');
       setAddressInput('');
       setOwnershipInput('100');
+      setBalanceAmountInput('');
       setCurrencyInput('USD');
       setModelNoteInput('');
     } catch (e) {
@@ -526,9 +546,8 @@ export default function AccountsScreen() {
     </View>
   );
 
-  return (
-    <View style={styles.container}>
-      {/* Gradient summary */}
+  const renderListHeader = () => (
+    <>
       <LinearGradient
         colors={gradients.hero}
         start={{ x: 0, y: 0 }}
@@ -565,7 +584,6 @@ export default function AccountsScreen() {
         </View>
       </LinearGradient>
 
-      {/* Add actions */}
       <View style={styles.actionRow}>
         <TouchableOpacity style={styles.actionButton} onPress={() => setIsAddModalVisible(true)}>
           <Ionicons name="wallet-outline" size={18} color={colors.accent} />
@@ -581,13 +599,19 @@ export default function AccountsScreen() {
       </View>
 
       <Text style={styles.listHeading}>{t('connectedAccounts', lang)}</Text>
+    </>
+  );
 
+  return (
+    <View style={styles.container}>
       <SectionList
+        style={styles.accountsList}
         sections={accountSections}
         keyExtractor={item => item.id}
         renderItem={renderItem}
         renderSectionHeader={renderSectionHeader}
-        contentContainerStyle={{ gap: 12, paddingBottom: 20 }}
+        ListHeaderComponent={renderListHeader}
+        contentContainerStyle={styles.listContent}
         stickySectionHeadersEnabled={false}
         ListEmptyComponent={
           <EmptyState
@@ -650,6 +674,14 @@ export default function AccountsScreen() {
                   value={ownershipInput}
                   onChangeText={setOwnershipInput}
                   keyboardType="numeric"
+                />
+
+                <FormInput
+                  label={lang === 'ru' ? 'Баланс' : 'Balance'}
+                  placeholder="0"
+                  value={balanceAmountInput}
+                  onChangeText={setBalanceAmountInput}
+                  keyboardType="decimal-pad"
                 />
 
                 <Text style={styles.inputLabel}>{lang === 'ru' ? 'Валюта счета' : 'Account currency'}</Text>
@@ -940,6 +972,8 @@ export default function AccountsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: spacing(4), backgroundColor: colors.bg },
+  accountsList: { flex: 1 },
+  listContent: { gap: 12, paddingBottom: spacing(5) },
 
   // Gradient summary
   summaryCard: {

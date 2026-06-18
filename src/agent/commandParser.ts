@@ -8,6 +8,13 @@ type AccountLike = {
 export type ParsedCommand =
   | { action: 'btc_price'; confidence: number }
   | {
+      action: 'create_account';
+      name: string;
+      amount: number;
+      currency: string;
+      confidence: number;
+    }
+  | {
       action: 'update_balance';
       accountId: string;
       amount: number;
@@ -81,6 +88,52 @@ const GOAL_KEYWORDS = [
   '\u043d\u0430\u043a\u043e\u043f',
   '\u0445\u043e\u0447\u0443 \u043d\u0430\u043a\u043e\u043f',
   '\u0441\u0431\u0435\u0440\u0435\u0436',
+];
+
+const CREATE_ACCOUNT_KEYWORDS = [
+  'create account',
+  'create a account',
+  'create an account',
+  'add account',
+  'add a account',
+  'add an account',
+  'new account',
+  'open account',
+  'open a account',
+  'open an account',
+  '\u0441\u043e\u0437\u0434\u0430\u0439 \u0430\u043a\u043a\u0430\u0443\u043d\u0442',
+  '\u0441\u043e\u0437\u0434\u0430\u0442\u044c \u0430\u043a\u043a\u0430\u0443\u043d\u0442',
+  '\u0434\u043e\u0431\u0430\u0432\u044c \u0430\u043a\u043a\u0430\u0443\u043d\u0442',
+  '\u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0430\u043a\u043a\u0430\u0443\u043d\u0442',
+  '\u043d\u043e\u0432\u044b\u0439 \u0430\u043a\u043a\u0430\u0443\u043d\u0442',
+  '\u0441\u043e\u0437\u0434\u0430\u0439 \u0441\u0447\u0435\u0442',
+  '\u0441\u043e\u0437\u0434\u0430\u0442\u044c \u0441\u0447\u0435\u0442',
+  '\u0434\u043e\u0431\u0430\u0432\u044c \u0441\u0447\u0435\u0442',
+  '\u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0441\u0447\u0435\u0442',
+  '\u043e\u0442\u043a\u0440\u043e\u0439 \u0441\u0447\u0435\u0442',
+  '\u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0441\u0447\u0435\u0442',
+  '\u043d\u043e\u0432\u044b\u0439 \u0441\u0447\u0435\u0442',
+];
+
+const CREATE_ACCOUNT_VERBS = [
+  'create',
+  'open',
+  'new',
+  '\u0441\u043e\u0437\u0434\u0430\u0439',
+  '\u0441\u043e\u0437\u0434\u0430\u0442\u044c',
+  '\u043e\u0442\u043a\u0440\u043e\u0439',
+  '\u043e\u0442\u043a\u0440\u044b\u0442\u044c',
+  '\u043d\u043e\u0432\u044b\u0439',
+  '\u043d\u043e\u0432\u0443\u044e',
+];
+
+const ACCOUNT_NOUNS = [
+  'account',
+  'wallet',
+  '\u0430\u043a\u043a\u0430\u0443\u043d\u0442',
+  '\u0441\u0447\u0435\u0442',
+  '\u0441\u0447\u0451\u0442',
+  '\u043a\u043e\u0448\u0435\u043b\u0435\u043a',
 ];
 
 const CURRENCY_PATTERNS: Array<[string, RegExp]> = [
@@ -185,6 +238,31 @@ function hasAny(text: string, keywords: string[]): boolean {
   return keywords.some((keyword) => text.includes(keyword));
 }
 
+function isCreateAccountCommand(text: string): boolean {
+  return hasAny(text, CREATE_ACCOUNT_KEYWORDS) || (hasAny(text, CREATE_ACCOUNT_VERBS) && hasAny(text, ACCOUNT_NOUNS));
+}
+
+function extractCreateAccountName(rawText: string): string | null {
+  const amountMatch = rawText.match(/(?:\d[\d\s\u00a0]*)(?:[,.]\d+)?/);
+  const beforeAmount = (amountMatch ? rawText.slice(0, amountMatch.index) : rawText)
+    .split(/[,.;:]/)[0]
+    .trim();
+  if (!beforeAmount) return null;
+
+  let candidate = beforeAmount
+    .replace(/^\s*(create|add|open)\s+(?:a\s+|an\s+)?(?:new\s+)?(?:(?:bank\s+)?account|wallet)\s+/i, '')
+    .replace(/^\s*(create|add|open|new)\s+/i, '')
+    .replace(/^\s*(\u0441\u043e\u0437\u0434\u0430\u0439|\u0441\u043e\u0437\u0434\u0430\u0442\u044c|\u0434\u043e\u0431\u0430\u0432\u044c|\u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c|\u043e\u0442\u043a\u0440\u043e\u0439|\u043e\u0442\u043a\u0440\u044b\u0442\u044c)\s+(\u043d\u043e\u0432\u044b\u0439\s+|\u043d\u043e\u0432\u0443\u044e\s+)?(\u0431\u0430\u043d\u043a\u043e\u0432\u0441\u043a\u0438\u0439\s+)?(\u0430\u043a\u043a\u0430\u0443\u043d\u0442|\u0441\u0447\u0435\u0442|\u0441\u0447\u0451\u0442|\u043a\u043e\u0448\u0435\u043b\u0435\u043a)\s+/i, '')
+    .replace(/^\s*(\u0441\u043e\u0437\u0434\u0430\u0439|\u0441\u043e\u0437\u0434\u0430\u0442\u044c|\u0434\u043e\u0431\u0430\u0432\u044c|\u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c|\u043e\u0442\u043a\u0440\u043e\u0439|\u043e\u0442\u043a\u0440\u044b\u0442\u044c|\u043d\u043e\u0432\u044b\u0439|\u043d\u043e\u0432\u0443\u044e)\s+/i, '')
+    .replace(/\b(account|wallet|with|balance|now|has|there|is|in)\b/gi, ' ')
+    .replace(/(\u0430\u043a\u043a\u0430\u0443\u043d\u0442|\u0441\u0447\u0435\u0442|\u0441\u0447\u0451\u0442|\u0442\u0430\u043c|\u0441\u0435\u0439\u0447\u0430\u0441|\u043b\u0435\u0436\u0438\u0442|\u043d\u0430)/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  candidate = candidate.replace(/^[-\s]+|[-\s]+$/g, '');
+  return candidate.length >= 2 ? candidate : null;
+}
+
 function asksForCompanyAccount(text: string): boolean {
   return hasAny(text, [
     'company',
@@ -263,6 +341,97 @@ function parseWordAmount(text: string): number | null {
 
 function parseAmount(text: string): number | null {
   return parseNumericAmount(text) ?? parseWordAmount(text);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function extractBalanceAccountNameHint(rawText: string): string | null {
+  const amountMatch = rawText.match(/(?:\d[\d\s\u00a0]*)(?:[,.]\d+)?/);
+  if (!amountMatch) return null;
+
+  let candidate = normalizeText(rawText.slice(0, amountMatch.index));
+  const fillerWords = [
+    'create',
+    'open',
+    'new',
+    'set',
+    'balance',
+    'now',
+    'make',
+    'it',
+    'add',
+    'plus',
+    'deposit',
+    'received',
+    'top',
+    'up',
+    'subtract',
+    'spend',
+    'spent',
+    'minus',
+    'pay',
+    'paid',
+    'withdraw',
+    'withdrew',
+    'to',
+    'from',
+    'on',
+    'in',
+    'my',
+    'account',
+    'bank',
+    'card',
+    'wallet',
+    '\u0443',
+    '\u043c\u0435\u043d\u044f',
+    '\u043d\u0430',
+    '\u0432',
+    '\u0441',
+    '\u0441\u043e',
+    '\u0442\u0430\u043c',
+    '\u0441\u0435\u0439\u0447\u0430\u0441',
+    '\u043b\u0435\u0436\u0438\u0442',
+    '\u0442\u0435\u043f\u0435\u0440\u044c',
+    '\u0431\u0430\u043b\u0430\u043d\u0441',
+    '\u0441\u0447\u0435\u0442',
+    '\u0441\u0447\u0435\u0442\u0443',
+    '\u0441\u0447\u0435\u0442\u0435',
+    '\u0430\u043a\u043a\u0430\u0443\u043d\u0442',
+    '\u0431\u0430\u043d\u043a',
+    '\u043a\u0430\u0440\u0442\u0430',
+    '\u0434\u043e\u0431\u0430\u0432\u044c',
+    '\u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c',
+    '\u043f\u043b\u044e\u0441',
+    '\u043f\u043e\u043f\u043e\u043b\u043d\u0438',
+    '\u0441\u043f\u0438\u0448\u0438',
+    '\u0441\u043f\u0438\u0441\u0430\u0442\u044c',
+    '\u043c\u0438\u043d\u0443\u0441',
+    '\u0441\u043e\u0437\u0434\u0430\u0439',
+    '\u0441\u043e\u0437\u0434\u0430\u0442\u044c',
+    '\u043e\u0442\u043a\u0440\u043e\u0439',
+    '\u043e\u0442\u043a\u0440\u044b\u0442\u044c',
+    '\u043d\u043e\u0432\u044b\u0439',
+    '\u043d\u043e\u0432\u0443\u044e',
+    '\u0443\u0441\u0442\u0430\u043d\u043e\u0432\u0438',
+    '\u043f\u043e\u0441\u0442\u0430\u0432\u044c',
+    '\u0441\u0434\u0435\u043b\u0430\u0439',
+  ];
+
+  for (const word of fillerWords) {
+    candidate = candidate.replace(new RegExp(`(^|\\s)${escapeRegExp(word)}(?=\\s|$)`, 'gi'), ' ');
+  }
+
+  const tokens = candidate
+    .split(/\s+/)
+    .filter((token) => token.length >= 3 && new RegExp(`[a-z${RU_CHARS}]`, 'i').test(token));
+
+  return tokens.length > 0 ? tokens.join(' ') : null;
+}
+
+function hasUnmatchedAccountHint(rawText: string): boolean {
+  return extractBalanceAccountNameHint(rawText) !== null;
 }
 
 function accountAliases(account: AccountLike): string[] {
@@ -362,6 +531,7 @@ export function isPotentialCommand(rawText: string): boolean {
   const text = normalizeText(rawText);
   return (
     /\bbtc\b|\bbitcoin\b/.test(text) ||
+    isCreateAccountCommand(text) ||
     detectOperation(text) !== null ||
     (parseAmount(text) !== null && isGoalCommand(text))
   );
@@ -395,18 +565,35 @@ export function parseFinanceCommand(
     };
   }
 
+  if (isCreateAccountCommand(text)) {
+    const name = extractCreateAccountName(rawText) ?? extractBalanceAccountNameHint(rawText);
+    if (!name) return null;
+    return {
+      action: 'create_account',
+      name,
+      amount,
+      currency: detectCurrency(rawText),
+      confidence: 0.88,
+    };
+  }
+
   const explicitOperation = detectOperation(text);
   const accountMatch = findAccount(text, accounts);
+  const hasUnknownAccountHint = accountMatch.confidence === 0 && hasUnmatchedAccountHint(rawText);
   let account = accountMatch.account;
   let accountConfidence = accountMatch.confidence;
 
   const recentAccountId = findRecentToolAccount(chatHistory);
-  if (!account && recentAccountId) {
+  if (!account && recentAccountId && !hasUnknownAccountHint) {
     account = accounts.find((item) => item.id === recentAccountId) || null;
     accountConfidence = account ? 0.74 : 0;
   }
 
   const currency = detectCurrency(rawText, account);
+  if (!account && hasUnknownAccountHint) {
+    return null;
+  }
+
   if (!account) {
     account = defaultAccountForCurrency(accounts, currency);
     accountConfidence = account ? 0.62 : 0;
@@ -439,6 +626,14 @@ export function commandToToolCall(command: ParsedCommand): string {
     return `[TOOL_CALL: UPDATE_GOAL: ${JSON.stringify({
       targetValue: command.targetValue,
       title: command.title,
+      currency: command.currency,
+    })}]`;
+  }
+
+  if (command.action === 'create_account') {
+    return `[TOOL_CALL: CREATE_ACCOUNT: ${JSON.stringify({
+      accountName: command.name,
+      amount: command.amount,
       currency: command.currency,
     })}]`;
   }

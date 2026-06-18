@@ -44,7 +44,10 @@ function buildContextString(): string {
   let total = 0;
   accounts.forEach(a => {
     // Include account ID and currency to help the LLM match them correctly
-    context += `- ${a.name} (ID: ${a.id}, owner: ${a.owner_type || 'personal'}, share: ${a.ownership_percent || 100}%): ${a.amount} ${a.currency || 'USD'} (USD: $${a.usd_value}, owned USD: $${a.owned_usd_value || a.usd_value}). Note: ${a.model_note || 'No note'}\n`;
+    const syncDetails = typeof a.raw_text === 'string' && a.raw_text.trim()
+      ? ` Sync details: ${a.raw_text.slice(0, 500)}`
+      : '';
+    context += `- ${a.name} (ID: ${a.id}, source: ${a.source || 'manual'}, owner: ${a.owner_type || 'personal'}, share: ${a.ownership_percent || 100}%): ${a.amount} ${a.currency || 'USD'} (USD: $${a.usd_value}, owned USD: $${a.owned_usd_value || a.usd_value}). Note: ${a.model_note || 'No note'}${syncDetails}\n`;
     total += a.usd_value;
   });
 
@@ -211,6 +214,25 @@ function isPaymentQuestion(text: string): boolean {
     text.includes('due') ||
     text.includes('cover')
   );
+}
+
+function getChainScope(text: string): 'aptos' | 'solana' | null {
+  if (/\bapt\b|\baptos\b|аптос/.test(text)) return 'aptos';
+  if (/\bsol\b|\bsolana\b|солана/.test(text)) return 'solana';
+  return null;
+}
+
+function getChainScopedAccounts(
+  text: string,
+  accounts: ReturnType<typeof getLatestBalances>
+): ReturnType<typeof getLatestBalances> {
+  const chain = getChainScope(text);
+  if (!chain) return [];
+
+  return accounts.filter((account) => {
+    const haystack = `${account.id} ${account.name} ${account.source || ''} ${account.model_note || ''}`.toLowerCase();
+    return haystack.includes(chain);
+  });
 }
 
 function getLargestAccount(accounts: ReturnType<typeof getLatestBalances>): any | null {
@@ -463,6 +485,17 @@ function answerSimpleReadQuestion(question: string, accounts: ReturnType<typeof 
   const rateAnswer = answerExchangeRateQuestion(text);
   if (rateAnswer) return rateAnswer;
 
+  const chainScopedAccounts = getChainScopedAccounts(text, accounts);
+  if (
+    chainScopedAccounts.length > 1 &&
+    (isBalanceReadQuestion(text) || isAccountOnlyReadQuestion(text) || isOverviewQuestion(text))
+  ) {
+    // Multiple wallets share the same chain keyword (e.g. two Aptos wallets).
+    // Let QVAC answer from the full local context so it can summarize all of
+    // them and surface runtime stats/badges in the chat UI.
+    return null;
+  }
+
   if (
     (isCompanyScopeQuestion(text) || isPersonalScopeQuestion(text)) &&
     (isOverviewQuestion(text) || text.includes('счет') || text.includes('account') || text.includes('money') || text.includes('деньг'))
@@ -500,8 +533,9 @@ const COMMAND_JSON_SCHEMA = {
   properties: {
     action: {
       type: 'string',
-      enum: ['none', 'btc_price', 'update_balance', 'update_goal'],
+      enum: ['none', 'btc_price', 'create_account', 'update_balance', 'update_goal'],
     },
+    accountName: { type: 'string' },
     accountId: { type: 'string' },
     amount: { type: 'number' },
     currency: { type: 'string' },
@@ -552,6 +586,19 @@ function structuredResultToCommand(data: any, accounts: ReturnType<typeof getLat
     };
   }
 
+  if (data.action === 'create_account') {
+    const name = String(data.accountName || data.name || '').trim();
+    const amount = Number(data.amount);
+    if (!name || !Number.isFinite(amount) || amount < 0) return null;
+    return {
+      action: 'create_account',
+      name,
+      amount,
+      currency: normalizeCurrency(data.currency || 'USD'),
+      confidence: 0.8,
+    };
+  }
+
   if (data.action === 'update_balance') {
     const account = accounts.find((item) => item.id === data.accountId);
     const amount = Number(data.amount);
@@ -581,15 +628,18 @@ async function askStructuredCommandFallback(
 Return JSON only. If the user is asking a normal question or details are missing, return {"action":"none"}.
 Allowed actions:
 - btc_price
+- create_account with accountName, amount, currency
 - update_balance with accountId, amount, currency, type add|subtract|set
 - update_goal with targetValue, title, currency
 
 Rules:
+- If the user asks to create/add/open a new account, return create_account. Do not update an existing account.
 - set means current balance/state.
 - add means deposit/received/plus.
 - subtract means spend/withdraw/minus.
 - If the user says company/business/corporate, prefer owner=company accounts. If they do not, prefer owner=personal for ambiguous bank names like Kaspi or BCC.
-- Use only account IDs from the account list.`;
+- update_balance may use only account IDs from the account list and only when the named account clearly matches.
+- If the user names an account that is not in the account list, return create_account if they asked to create it; otherwise return {"action":"none"}. Never substitute a different existing account just because the currency matches.`;
 
   const recentTool = chatHistory
     ?.slice()
@@ -662,20 +712,26 @@ export async function askMuffinAi(
     instructions = `You are a private local financial assistant on iPhone. You MUST respond in Russian. Keep answers concise.
 Tool calls allowed:
 - [TOOL_CALL: BTC_PRICE] (для запроса цены BTC)
+- [TOOL_CALL: CREATE_ACCOUNT: {"accountName": "ACCOUNT_NAME", "amount": NUMBER, "currency": "CURRENCY"}] (для создания нового счета с начальным балансом)
 - [TOOL_CALL: UPDATE_BALANCE: {"accountId": "ACCOUNT_ID", "amount": NUMBER, "currency": "CURRENCY", "type": "add"|"subtract"|"set"}] (для изменения баланса)
 - [TOOL_CALL: UPDATE_GOAL: {"targetValue": NUMBER, "title": "GOAL_TITLE", "currency": "USD"}] (для целей сбережений)
 
 UPDATE_BALANCE Type Rules:
-1. "type": "set" is DEFAULT для сообщения баланса/состояния счета (e.g. "на Bybit X", "баланс X", "теперь X", "установи X", "сделай X").
-2. "type": "add" ONLY для пополнения/получения (e.g. "добавь X", "плюс X", "пришло X", "получил X", "пополнил X", "зачислили X").
-3. "type": "subtract" ONLY для списания/траты (e.g. "потратил X", "минус X", "купил за X", "списал X", "оплатил X", "вывел X", "снял X").
-4. CORRECTION RULE: Если пользователь вводит только число/коррекцию (e.g. "567", "нет, 567"), и предыдущим шагом был UPDATE_BALANCE, повторите UPDATE_BALANCE для того же счета с новым amount и "type": "set".
+0. CREATE_ACCOUNT wins over UPDATE_BALANCE when the user says "создай/добавь/открой новый счет/аккаунт". Example: "Создай аккаунт Halyk Bank, там сейчас лежит 9642 $" -> CREATE_ACCOUNT with accountName "Halyk Bank".
+1. UPDATE_BALANCE is ONLY for existing accounts from LOCAL FINANCIAL MEMORY. The account name must clearly match an account ID from the context.
+2. Never update another existing account just because the requested account is missing or the currency matches. If the named account is not in the list, use CREATE_ACCOUNT when creation is requested; otherwise answer with text asking which account to use.
+3. "type": "set" is DEFAULT для сообщения баланса/состояния счета (e.g. "на Bybit X", "баланс X", "теперь X", "установи X", "сделай X").
+4. "type": "add" ONLY для пополнения/получения (e.g. "добавь X", "плюс X", "пришло X", "получил X", "пополнил X", "зачислили X").
+5. "type": "subtract" ONLY для списания/траты (e.g. "потратил X", "минус X", "купил за X", "списал X", "оплатил X", "вывел X", "снял X").
+6. CORRECTION RULE: Если пользователь вводит только число/коррекцию (e.g. "567", "нет, 567"), и предыдущим шагом был UPDATE_BALANCE, повторите UPDATE_BALANCE для того же счета с новым amount и "type": "set".
 
 Выводите ТОЛЬКО TOOL_CALL, если уверены, без текста. Для обычных вопросов (e.g. "сколько осталось до цели?") отвечайте текстом.
 CRITICAL: Не копируйте числа из примеров. Вычисляйте динамически по LOCAL FINANCIAL MEMORY. Остаток до цели = (Goal Target - Total Assets) рассчитывайте точно.
+Если пользователь называет блокчейн/сеть вроде Aptos или Solana, суммируйте все подходящие счета из LOCAL FINANCIAL MEMORY, а не только первый совпавший счет.
 
 Examples (REFERENCE ONLY - DO NOT COPY NUMBERS):
 - "хочу накопить 120000$" -> [TOOL_CALL: UPDATE_GOAL: {"targetValue": 120000, "title": "Reach $120,000 in liquid assets", "currency": "USD"}]
+- "Создай аккаунт Halyk Bank, там сейчас лежит 9642 $" -> [TOOL_CALL: CREATE_ACCOUNT: {"accountName": "Halyk Bank", "amount": 9642, "currency": "USD"}]
 - "добавь 5000 тенге на Kaspi Gold" -> [TOOL_CALL: UPDATE_BALANCE: {"accountId": "acc_kaspi", "amount": 5000, "currency": "KZT", "type": "add"}]
 - "я потратил 1500 рублей с Bybit Card" -> [TOOL_CALL: UPDATE_BALANCE: {"accountId": "acc_bybit", "amount": 1500, "currency": "RUB", "type": "subtract"}]
 - "у меня на Kaspi Gold теперь 1102420 KZT" -> [TOOL_CALL: UPDATE_BALANCE: {"accountId": "acc_kaspi", "amount": 1102420, "currency": "KZT", "type": "set"}]
@@ -689,20 +745,26 @@ Examples (REFERENCE ONLY - DO NOT COPY NUMBERS):
     instructions = `You are a private local financial assistant on iPhone. Keep answers concise.
 Tool calls allowed:
 - [TOOL_CALL: BTC_PRICE] (for BTC price queries)
+- [TOOL_CALL: CREATE_ACCOUNT: {"accountName": "ACCOUNT_NAME", "amount": NUMBER, "currency": "CURRENCY"}] (for creating a new account with an opening balance)
 - [TOOL_CALL: UPDATE_BALANCE: {"accountId": "ACCOUNT_ID", "amount": NUMBER, "currency": "CURRENCY", "type": "add"|"subtract"|"set"}] (for balance updates)
 - [TOOL_CALL: UPDATE_GOAL: {"targetValue": NUMBER, "title": "GOAL_TITLE", "currency": "USD"}] (for savings goals)
 
 UPDATE_BALANCE Type Rules:
-1. "type": "set" is DEFAULT for reporting balance/account state (e.g. "on Bybit X", "my balance is X", "set balance to X", "make it X").
-2. "type": "add" ONLY for depositing/receiving (e.g. "add X", "plus X", "received X", "topped up X").
-3. "type": "subtract" ONLY for spending/withdrawing (e.g. "spent X", "minus X", "paid X", "bought X", "charged X").
-4. CORRECTION RULE: If user provides only a number/correction (e.g. "567", "no, 567"), and the last turn was a balance tool call, repeat UPDATE_BALANCE for the same account with the new amount and "type": "set".
+0. CREATE_ACCOUNT wins over UPDATE_BALANCE when the user says create/add/open a new account. Example: "Create Halyk Bank account with 9642 USD" -> CREATE_ACCOUNT with accountName "Halyk Bank".
+1. UPDATE_BALANCE is ONLY for existing accounts from LOCAL FINANCIAL MEMORY. The account name must clearly match an account ID from the context.
+2. Never update another existing account just because the requested account is missing or the currency matches. If the named account is not in the list, use CREATE_ACCOUNT when creation is requested; otherwise reply with text asking which account to use.
+3. "type": "set" is DEFAULT for reporting balance/account state (e.g. "on Bybit X", "my balance is X", "set balance to X", "make it X").
+4. "type": "add" ONLY for depositing/receiving (e.g. "add X", "plus X", "received X", "topped up X").
+5. "type": "subtract" ONLY for spending/withdrawing (e.g. "spent X", "minus X", "paid X", "bought X", "charged X").
+6. CORRECTION RULE: If user provides only a number/correction (e.g. "567", "no, 567"), and the last turn was a balance tool call, repeat UPDATE_BALANCE for the same account with the new amount and "type": "set".
 
 Only output the TOOL_CALL if sure, without any conversational text. For chat questions (e.g. "how much is left?"), reply in plain text.
 CRITICAL: Never copy numbers from examples. Use LOCAL FINANCIAL MEMORY. Compute remaining goal as (Goal Target - Total Assets) accurately.
+If the user names a blockchain/network such as Aptos or Solana, summarize all matching accounts from LOCAL FINANCIAL MEMORY, not just the first matching account.
 
 Examples (REFERENCE ONLY - DO NOT COPY NUMBERS):
 - "хочу накопить 120000$" -> [TOOL_CALL: UPDATE_GOAL: {"targetValue": 120000, "title": "Reach $120,000 in liquid assets", "currency": "USD"}]
+- "Create Halyk Bank account with 9642 USD" -> [TOOL_CALL: CREATE_ACCOUNT: {"accountName": "Halyk Bank", "amount": 9642, "currency": "USD"}]
 - "add 5000 KZT to Kaspi Gold" -> [TOOL_CALL: UPDATE_BALANCE: {"accountId": "acc_kaspi", "amount": 5000, "currency": "KZT", "type": "add"}]
 - "I spent 1500 RUB from Bybit Card" -> [TOOL_CALL: UPDATE_BALANCE: {"accountId": "acc_bybit", "amount": 1500, "currency": "RUB", "type": "subtract"}]
 - "my Kaspi Gold balance is now 1102420 KZT" -> [TOOL_CALL: UPDATE_BALANCE: {"accountId": "acc_kaspi", "amount": 1102420, "currency": "KZT", "type": "set"}]
