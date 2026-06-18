@@ -1,6 +1,8 @@
 import { getAll, executeSql, getFirst, getRatesMap } from '../db/database';
 import { saveExchangeCredentials, deleteExchangeCredentials, getExchangeCredentials } from '../services/secureStoreService';
-import { fetchBybitBalance } from '../services/bybitService';
+import { fetchBybitBalanceDetails } from '../services/bybitService';
+import { fetchBinanceBalance } from '../services/binanceService';
+import { fetchOkxBalance } from '../services/okxService';
 
 export { getRatesMap };
 
@@ -135,6 +137,18 @@ export function updateAccountAddress(id: string, address: string) {
   );
 }
 
+export function updateAccountName(id: string, name: string) {
+  const trimmedName = name.trim();
+  if (!trimmedName) {
+    throw new Error('Account name is required');
+  }
+
+  executeSql(
+    'UPDATE accounts SET name = ? WHERE id = ?',
+    [trimmedName, id]
+  );
+}
+
 export function updateAccountMetadata(
   id: string,
   ownerType: OwnerType,
@@ -183,7 +197,7 @@ export function getLatestBalances() {
   // Retrieve the latest balance snapshot for each account by selecting the snapshot ID
   // with the maximum creation timestamp for that account.
   const rows = getAll(`
-    SELECT a.id, a.name, a.type, a.owner_type, a.model_note, a.ownership_percent, a.source, a.address, b.amount, COALESCE(b.currency, a.currency) as currency, b.usd_value, b.created_at
+    SELECT a.id, a.name, a.type, a.owner_type, a.model_note, a.ownership_percent, a.source, a.address, b.amount, COALESCE(b.currency, a.currency) as currency, b.usd_value, b.raw_text, b.created_at
     FROM accounts a
     LEFT JOIN balance_snapshots b ON a.id = b.account_id
     WHERE b.id = (
@@ -495,19 +509,20 @@ export async function addExchangeConnection(
   exchange: string,
   apiKey: string,
   apiSecret: string,
-  isTestnet: boolean
+  isTestnet: boolean,
+  passphrase?: string
 ): Promise<string> {
   const now = new Date().toISOString();
   const connectionId = 'conn_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
 
   // 1. Save keys to SecureStore
-  await saveExchangeCredentials(connectionId, apiKey, apiSecret);
+  await saveExchangeCredentials(connectionId, apiKey, apiSecret, passphrase);
 
   // 2. Insert connection record into SQLite
   const permissions = isTestnet ? 'read_only_testnet' : 'read_only';
   executeSql(
-    'INSERT INTO exchange_connections (id, exchange, label, api_key_ref, api_secret_ref, permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [connectionId, exchange, label, connectionId, connectionId, permissions, now]
+    'INSERT INTO exchange_connections (id, exchange, label, api_key_ref, api_secret_ref, passphrase_ref, permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [connectionId, exchange, label, connectionId, connectionId, passphrase ? connectionId : null, permissions, now]
   );
 
   // 3. Create corresponding account
@@ -553,10 +568,24 @@ export async function syncExchangeBalance(accountId: string): Promise<number> {
   }
 
   let balance = 0;
+  let rawText: string | null = null;
   const isTestnet = conn.permissions === 'read_only_testnet';
 
   if (conn.exchange.toLowerCase() === 'bybit') {
-    balance = await fetchBybitBalance(creds.apiKey, creds.apiSecret, isTestnet);
+    const result = await fetchBybitBalanceDetails(creds.apiKey, creds.apiSecret, isTestnet);
+    balance = result.totalUsd;
+    rawText = JSON.stringify({
+      provider: 'bybit',
+      totalUsd: result.totalUsd,
+      accounts: result.details.accounts,
+    });
+  } else if (conn.exchange.toLowerCase() === 'binance') {
+    balance = await fetchBinanceBalance(creds.apiKey, creds.apiSecret, isTestnet);
+  } else if (conn.exchange.toLowerCase() === 'okx') {
+    if (!creds.passphrase) {
+      throw new Error(`API passphrase not found in secure storage for connection: ${connectionId}`);
+    }
+    balance = await fetchOkxBalance(creds.apiKey, creds.apiSecret, creds.passphrase, isTestnet);
   } else {
     throw new Error(`Exchange ${conn.exchange} is not supported yet.`);
   }
@@ -566,8 +595,8 @@ export async function syncExchangeBalance(accountId: string): Promise<number> {
   const usdValue = estimateUsdValue(balance, 'USD');
 
   executeSql(
-    'INSERT INTO balance_snapshots (id, account_id, amount, currency, usd_value, source, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [snapshotId, accountId, balance, 'USD', usdValue, `${conn.exchange.toLowerCase()}_api`, 1.0, now]
+    'INSERT INTO balance_snapshots (id, account_id, amount, currency, usd_value, source, confidence, raw_text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [snapshotId, accountId, balance, 'USD', usdValue, `${conn.exchange.toLowerCase()}_api`, 1.0, rawText, now]
   );
 
   return balance;

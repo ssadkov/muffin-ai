@@ -33,18 +33,31 @@ import {
   syncAllExchanges,
   getSetting,
   updateAccountMetadata,
+  updateAccountName,
   OwnerType
 } from '../tools/databaseTools';
 import { testBybitConnection } from '../services/bybitService';
+import { testBinanceConnection } from '../services/binanceService';
+import { testOkxConnection } from '../services/okxService';
 import { syncPublicWallets } from '../services/walletSyncService';
 import { useIsFocused } from '@react-navigation/native';
 import { t, Language } from '../localization/localization';
+
+type ExchangeProvider = 'Bybit' | 'Binance' | 'OKX';
+type ExchangeBreakdownToken = {
+  accountType: string;
+  coin: string;
+  balance: number;
+  usdValue: number;
+};
 
 const NETWORK_META: Record<string, { label: string; color: string; soft: string; abbr: string }> = {
   'solana_public_wallet':   { label: 'Solana',   color: '#9945FF', soft: 'rgba(153,69,255,0.14)', abbr: 'SOL' },
   'aptos_public_wallet':    { label: 'Aptos',    color: '#00C8FF', soft: 'rgba(0,200,255,0.14)',   abbr: 'APT' },
   'ethereum_public_wallet': { label: 'Ethereum', color: '#627EEA', soft: 'rgba(98,126,234,0.14)',  abbr: 'ETH' },
 };
+
+const EXCHANGE_OPTIONS: ExchangeProvider[] = ['Bybit', 'Binance', 'OKX'];
 
 function getAccountVisual(item: any): { icon: keyof typeof Ionicons.glyphMap; color: string; soft: string } {
   const isCryptoWallet = item.source?.endsWith('_wallet') || item.type === 'crypto_wallet';
@@ -54,12 +67,54 @@ function getAccountVisual(item: any): { icon: keyof typeof Ionicons.glyphMap; co
   return { icon: 'card', color: colors.textSecondary, soft: colors.surfaceAlt };
 }
 
+function getExchangeApiLabel(source: string, lang: Language): string {
+  if (source === 'bybit_api') return t('bybitApiLabel', lang);
+  if (source === 'binance_api') return t('binanceApiLabel', lang);
+  if (source === 'okx_api') return t('okxApiLabel', lang);
+  return t('exchangeApi', lang);
+}
+
+function parseExchangeBreakdown(rawText?: string | null): ExchangeBreakdownToken[] {
+  if (!rawText) return [];
+
+  try {
+    const parsed = JSON.parse(rawText);
+    if (!Array.isArray(parsed?.accounts)) return [];
+
+    const tokens: ExchangeBreakdownToken[] = [];
+    for (const account of parsed.accounts) {
+      for (const coin of account.coins || []) {
+        const balance = Number(coin.balance || 0);
+        const usdValue = Number(coin.usdValue || 0);
+        if (balance <= 0 || usdValue <= 0) continue;
+        tokens.push({
+          accountType: String(account.accountType || ''),
+          coin: String(coin.coin || ''),
+          balance,
+          usdValue,
+        });
+      }
+    }
+
+    return tokens.sort((a, b) => b.usdValue - a.usdValue);
+  } catch {
+    return [];
+  }
+}
+
+function formatTokenAmount(value: number): string {
+  if (value >= 1000) return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (value >= 1) return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  return value.toLocaleString(undefined, { maximumFractionDigits: 8 });
+}
+
 export default function AccountsScreen() {
   const isFocused = useIsFocused();
   const [lang, setLang] = useState<Language>('ru');
   const [accounts, setAccounts] = useState<any[]>([]);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [selectedAccount, setSelectedAccount] = useState<any>(null);
+  const [accountNameInput, setAccountNameInput] = useState('');
   const [addressInput, setAddressInput] = useState('');
   const [ownerTypeInput, setOwnerTypeInput] = useState<OwnerType>('personal');
   const [ownershipInput, setOwnershipInput] = useState('100');
@@ -80,9 +135,11 @@ export default function AccountsScreen() {
 
   // Connect Exchange state
   const [isConnectModalVisible, setIsConnectModalVisible] = useState(false);
+  const [selectedExchange, setSelectedExchange] = useState<ExchangeProvider>('Bybit');
   const [exchangeLabel, setExchangeLabel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [apiSecret, setApiSecret] = useState('');
+  const [apiPassphrase, setApiPassphrase] = useState('');
   const [isTestnet, setIsTestnet] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
@@ -99,6 +156,7 @@ export default function AccountsScreen() {
 
   const openEditModal = (account: any) => {
     setSelectedAccount(account);
+    setAccountNameInput(account.name || '');
     setAddressInput(account.address || '');
     setOwnerTypeInput((account.owner_type === 'company' ? 'company' : 'personal') as OwnerType);
     setOwnershipInput(String(account.ownership_percent || 100));
@@ -117,10 +175,20 @@ export default function AccountsScreen() {
   const saveAccountConfig = () => {
     if (!selectedAccount) return;
     
+    const trimmedName = accountNameInput.trim();
     const trimmedAddress = addressInput.trim();
     const parsedOwnership = parseFloat(ownershipInput);
+
+    if (!trimmedName) {
+      Alert.alert(
+        t('validationGoalTitle', lang),
+        lang === 'ru' ? 'Пожалуйста, введите название счета.' : 'Please enter an account name.'
+      );
+      return;
+    }
     
     try {
+      updateAccountName(selectedAccount.id, trimmedName);
       updateAccountAddress(selectedAccount.id, trimmedAddress);
       updateAccountMetadata(
         selectedAccount.id,
@@ -136,6 +204,7 @@ export default function AccountsScreen() {
       
       setIsEditModalVisible(false);
       setSelectedAccount(null);
+      setAccountNameInput('');
       setAddressInput('');
       setOwnershipInput('100');
       setCurrencyInput('USD');
@@ -176,8 +245,9 @@ export default function AccountsScreen() {
     const trimmedLabel = exchangeLabel.trim();
     const trimmedKey = apiKey.trim();
     const trimmedSecret = apiSecret.trim();
+    const trimmedPassphrase = apiPassphrase.trim();
 
-    if (!trimmedLabel || !trimmedKey || !trimmedSecret) {
+    if (!trimmedLabel || !trimmedKey || !trimmedSecret || (selectedExchange === 'OKX' && !trimmedPassphrase)) {
       Alert.alert(t('validationGoalTitle', lang), t('validationExchangeDesc', lang));
       return;
     }
@@ -185,13 +255,27 @@ export default function AccountsScreen() {
     setIsTestingConnection(true);
     try {
       // 1. Verify credentials by making a test API call
-      const isValid = await testBybitConnection(trimmedKey, trimmedSecret, isTestnet);
+      let isValid = false;
+      if (selectedExchange === 'Bybit') {
+        isValid = await testBybitConnection(trimmedKey, trimmedSecret, isTestnet);
+      } else if (selectedExchange === 'Binance') {
+        isValid = await testBinanceConnection(trimmedKey, trimmedSecret, isTestnet);
+      } else {
+        isValid = await testOkxConnection(trimmedKey, trimmedSecret, trimmedPassphrase, isTestnet);
+      }
       if (!isValid) {
-        throw new Error("Invalid credentials or response from Bybit.");
+        throw new Error(`Invalid credentials or response from ${selectedExchange}.`);
       }
 
       // 2. Add connection and account to SQLite & SecureStore
-      const accountId = await addExchangeConnection(trimmedLabel, 'Bybit', trimmedKey, trimmedSecret, isTestnet);
+      const accountId = await addExchangeConnection(
+        trimmedLabel,
+        selectedExchange,
+        trimmedKey,
+        trimmedSecret,
+        isTestnet,
+        selectedExchange === 'OKX' ? trimmedPassphrase : undefined
+      );
 
       // 3. Perform initial sync
       await syncExchangeBalance(accountId);
@@ -200,14 +284,15 @@ export default function AccountsScreen() {
       setExchangeLabel('');
       setApiKey('');
       setApiSecret('');
+      setApiPassphrase('');
       setIsTestnet(false);
       setIsConnectModalVisible(false);
       setAccounts(getLatestBalances());
       
-      Alert.alert(t('success', lang), t('bybitSuccess', lang));
+      Alert.alert(t('success', lang), t('exchangeSuccess', lang, { exchange: selectedExchange }));
     } catch (e: any) {
       console.error(e);
-      Alert.alert(t('exchangeConnError', lang), t('exchangeConnErrorDesc', lang));
+      Alert.alert(t('exchangeConnError', lang), t('exchangeConnErrorDesc', lang, { exchange: selectedExchange }));
     } finally {
       setIsTestingConnection(false);
     }
@@ -274,6 +359,7 @@ export default function AccountsScreen() {
     const isExchange = item.source.endsWith('_api') || item.type === 'exchange';
     const ownerType = item.owner_type || 'personal';
     const ownershipPercent = Number(item.ownership_percent || 100);
+    const exchangeBreakdown = isExchange ? parseExchangeBreakdown(item.raw_text) : [];
 
     const visual = getAccountVisual(item);
 
@@ -323,6 +409,25 @@ export default function AccountsScreen() {
                 <Ionicons name="pencil" size={15} color={colors.accent} />
               </TouchableOpacity>
             </View>
+            {exchangeBreakdown.length > 0 && (
+              <View style={styles.tokenBreakdown}>
+                {exchangeBreakdown.slice(0, 6).map((token) => (
+                  <View key={`${token.accountType}-${token.coin}`} style={styles.tokenRow}>
+                    <Text style={styles.tokenName} numberOfLines={1}>
+                      {token.coin} {token.accountType ? `(${token.accountType})` : ''}
+                    </Text>
+                    <Text style={styles.tokenValue} numberOfLines={1}>
+                      {formatTokenAmount(token.balance)} ≈ ${token.usdValue.toFixed(2)}
+                    </Text>
+                  </View>
+                ))}
+                {exchangeBreakdown.length > 6 && (
+                  <Text style={styles.tokenMore}>
+                    {lang === 'ru' ? `Еще ${exchangeBreakdown.length - 6} ток.` : `+${exchangeBreakdown.length - 6} more`}
+                  </Text>
+                )}
+              </View>
+            )}
           </View>
         )}
 
@@ -331,7 +436,7 @@ export default function AccountsScreen() {
             <Text style={styles.addressLabel}>{lang === 'ru' ? 'API интеграция' : 'API Integration'}</Text>
             <View style={styles.addressRow}>
               <Text style={styles.addressText} numberOfLines={1}>
-                {item.source === 'bybit_api' ? t('bybitApiLabel', lang) : t('exchangeApi', lang)}
+                {getExchangeApiLabel(item.source, lang)}
               </Text>
               <View style={{ flexDirection: 'row', gap: 6 }}>
                 <TouchableOpacity
@@ -370,18 +475,30 @@ export default function AccountsScreen() {
     );
   };
 
-  const renderHistoryItem = ({ item }: { item: any }) => (
-    <View style={styles.historyRow}>
-      <View>
-        <Text style={styles.historySource}>{t('sourceLabel', lang)}: {item.source}</Text>
-        <Text style={styles.historyDate}>{new Date(item.created_at).toLocaleString()}</Text>
+  const renderHistoryItem = ({ item }: { item: any }) => {
+    const exchangeBreakdown = parseExchangeBreakdown(item.raw_text);
+    return (
+      <View style={styles.historyRow}>
+        <View style={{ flex: 1, paddingRight: spacing(2) }}>
+          <Text style={styles.historySource}>{t('sourceLabel', lang)}: {item.source}</Text>
+          <Text style={styles.historyDate}>{new Date(item.created_at).toLocaleString()}</Text>
+          {exchangeBreakdown.length > 0 && (
+            <View style={styles.historyTokenList}>
+              {exchangeBreakdown.slice(0, 10).map((token) => (
+                <Text key={`${token.accountType}-${token.coin}`} style={styles.historyTokenText}>
+                  {token.coin} {formatTokenAmount(token.balance)} ≈ ${token.usdValue.toFixed(2)}
+                </Text>
+              ))}
+            </View>
+          )}
+        </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          <Text style={styles.historyAmount}>{item.amount} {item.currency}</Text>
+          <Text style={styles.historyUsd}>${item.usd_value?.toFixed(2)}</Text>
+        </View>
       </View>
-      <View style={{ alignItems: 'flex-end' }}>
-        <Text style={styles.historyAmount}>{item.amount} {item.currency}</Text>
-        <Text style={styles.historyUsd}>${item.usd_value?.toFixed(2)}</Text>
-      </View>
-    </View>
-  );
+    );
+  };
 
   const personalAccounts = accounts.filter((item) => (item.owner_type || 'personal') !== 'company');
   const companyAccounts = accounts.filter((item) => item.owner_type === 'company');
@@ -459,7 +576,7 @@ export default function AccountsScreen() {
           onPress={() => setIsConnectModalVisible(true)}
         >
           <Ionicons name="link-outline" size={18} color={colors.info} />
-          <Text style={[styles.actionButtonText, { color: colors.info }]}>{lang === 'ru' ? 'Подключить Bybit' : 'Connect Bybit'}</Text>
+          <Text style={[styles.actionButtonText, { color: colors.info }]}>{t('connectExchange', lang)}</Text>
         </TouchableOpacity>
       </View>
 
@@ -496,8 +613,16 @@ export default function AccountsScreen() {
             >
               <ScrollView contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
                 <Text style={styles.modalTitle}>
-                  {lang === 'ru' ? 'Настройка счета' : 'Account settings'}: {selectedAccount?.name}
+                  {lang === 'ru' ? 'Настройка счета' : 'Account settings'}
                 </Text>
+
+                <FormInput
+                  label={lang === 'ru' ? 'Название счета' : 'Account name'}
+                  placeholder={lang === 'ru' ? 'Например: Halyk Bank' : 'Example: Halyk Bank'}
+                  value={accountNameInput}
+                  onChangeText={setAccountNameInput}
+                  autoCapitalize="words"
+                />
 
                 <Text style={styles.inputLabel}>{lang === 'ru' ? 'Владелец' : 'Owner'}</Text>
                 <View style={styles.segmentedRow}>
@@ -654,7 +779,7 @@ export default function AccountsScreen() {
         </TouchableWithoutFeedback>
       </Modal>
 
-      {/* Connect Bybit Exchange Modal */}
+      {/* Connect Exchange Modal */}
       <Modal
         visible={isConnectModalVisible}
         transparent={true}
@@ -667,7 +792,28 @@ export default function AccountsScreen() {
               behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
               style={styles.modalContent}
             >
-              <Text style={styles.modalTitle}>{lang === 'ru' ? 'Подключение биржи Bybit' : 'Connect Bybit Exchange'}</Text>
+              <Text style={styles.modalTitle}>
+                {t('connectExchangeTitle', lang, { exchange: selectedExchange })}
+              </Text>
+
+              <Text style={styles.inputLabel}>{t('exchangeProviderLabel', lang)}</Text>
+              <View style={styles.segmentedRow}>
+                {EXCHANGE_OPTIONS.map((exchange) => {
+                  const isActive = selectedExchange === exchange;
+                  return (
+                    <TouchableOpacity
+                      key={exchange}
+                      style={[styles.segmentButton, isActive && styles.segmentButtonActive]}
+                      onPress={() => setSelectedExchange(exchange)}
+                      disabled={isTestingConnection}
+                    >
+                      <Text style={[styles.segmentButtonText, isActive && styles.segmentButtonTextActive]}>
+                        {exchange}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
               
               <FormInput
                 label={t('exchangeLabel', lang)}
@@ -678,7 +824,7 @@ export default function AccountsScreen() {
 
               <FormInput
                 label={t('apiKeyLabel', lang)}
-                placeholder={lang === 'ru' ? 'Введите API Key Bybit' : 'Enter Bybit API Key'}
+                placeholder={t('apiKeyPlaceholder', lang, { exchange: selectedExchange })}
                 value={apiKey}
                 onChangeText={setApiKey}
                 autoCapitalize="none"
@@ -688,7 +834,7 @@ export default function AccountsScreen() {
 
               <FormInput
                 label={t('apiSecretLabel', lang)}
-                placeholder={lang === 'ru' ? 'Введите API Secret Bybit' : 'Enter Bybit API Secret'}
+                placeholder={t('apiSecretPlaceholder', lang, { exchange: selectedExchange })}
                 value={apiSecret}
                 onChangeText={setApiSecret}
                 secureTextEntry
@@ -696,6 +842,19 @@ export default function AccountsScreen() {
                 autoCorrect={false}
                 mono
               />
+
+              {selectedExchange === 'OKX' && (
+                <FormInput
+                  label={t('apiPassphraseLabel', lang)}
+                  placeholder={t('apiPassphrasePlaceholder', lang)}
+                  value={apiPassphrase}
+                  onChangeText={setApiPassphrase}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  mono
+                />
+              )}
 
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
                 <Text style={styles.inputLabel}>{t('testnetLabel', lang)}</Text>
@@ -875,6 +1034,17 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     flex: 1,
   },
+  tokenBreakdown: {
+    marginTop: spacing(2),
+    paddingTop: spacing(2),
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    gap: 5,
+  },
+  tokenRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8, alignItems: 'center' },
+  tokenName: { color: colors.textSecondary, fontSize: fontSize.xs, flex: 1 },
+  tokenValue: { color: colors.textPrimary, fontSize: fontSize.xs, fontWeight: '700', textAlign: 'right' },
+  tokenMore: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 2 },
   iconButton: {
     backgroundColor: colors.accentSoft,
     width: 30,
@@ -987,6 +1157,8 @@ const styles = StyleSheet.create({
   },
   historySource: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: '600', textTransform: 'capitalize' },
   historyDate: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 4 },
+  historyTokenList: { marginTop: spacing(1.5), gap: 3 },
+  historyTokenText: { color: colors.textSecondary, fontSize: fontSize.xs },
   historyAmount: { color: colors.accent, fontSize: fontSize.md, fontWeight: '700' },
   historyUsd: { color: colors.textSecondary, fontSize: fontSize.xs, marginTop: 4 },
 });

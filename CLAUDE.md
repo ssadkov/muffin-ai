@@ -4,8 +4,8 @@
 
 Local-first personal finance assistant (QVAC Hackathon). Everything — chat, OCR of bank
 screenshots, voice transcription, financial rules — runs on-device. The only network calls are
-public blockchain RPC / exchange-rate lookups (see [remote_apis.json](remote_apis.json)); there is
-no cloud AI call anywhere in the app.
+public blockchain RPC, exchange-rate lookups, and user-authorized read-only exchange balance APIs
+(see [remote_apis.json](remote_apis.json)); there is no cloud AI call anywhere in the app.
 
 ## Stack
 - Expo / React Native ([App.tsx](App.tsx), [src/screens](src/screens))

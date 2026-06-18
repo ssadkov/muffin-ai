@@ -31,6 +31,84 @@
       "url": "https://fullnode.mainnet.aptoslabs.com",
       "purpose": "Fetching mainnet public wallet token and native balances",
       "critical": false
+    },
+    {
+      "name": "Bybit V5 Account API",
+      "url": "https://api.bybit.com/v5/account/wallet-balance",
+      "purpose": "Fetching read-only exchange wallet balances from user-provided Bybit API keys stored locally",
+      "critical": false
+    },
+    {
+      "name": "Bybit V5 Testnet Account API",
+      "url": "https://api-testnet.bybit.com/v5/account/wallet-balance",
+      "purpose": "Testing read-only Bybit exchange balance connections with user-provided testnet API keys",
+      "critical": false
+    },
+    {
+      "name": "Bybit V5 Funding Balance API",
+      "url": "https://api.bybit.com/v5/asset/transfer/query-account-coins-balance",
+      "purpose": "Fetching read-only Bybit funding wallet balances from user-provided API keys stored locally",
+      "critical": false
+    },
+    {
+      "name": "Bybit V5 Testnet Funding Balance API",
+      "url": "https://api-testnet.bybit.com/v5/asset/transfer/query-account-coins-balance",
+      "purpose": "Testing read-only Bybit funding wallet balance connections with user-provided testnet API keys",
+      "critical": false
+    },
+    {
+      "name": "Bybit V5 Spot Tickers API",
+      "url": "https://api.bybit.com/v5/market/tickers",
+      "purpose": "Fetching public Bybit spot prices to estimate USD value for Bybit funding wallet token balances",
+      "critical": false
+    },
+    {
+      "name": "Bybit V5 Testnet Spot Tickers API",
+      "url": "https://api-testnet.bybit.com/v5/market/tickers",
+      "purpose": "Testing public Bybit spot price fetches for funding wallet token valuation",
+      "critical": false
+    },
+    {
+      "name": "Binance Global Wallet Balance API",
+      "url": "https://api.binance.com/sapi/v1/asset/wallet/balance",
+      "purpose": "Fetching read-only Binance Global wallet balance totals from user-provided API keys stored locally",
+      "critical": false
+    },
+    {
+      "name": "Binance Global Spot Account API",
+      "url": "https://api.binance.com/api/v3/account",
+      "purpose": "Fallback read-only Binance Spot account balance sync from user-provided API keys stored locally",
+      "critical": false
+    },
+    {
+      "name": "Binance Global Spot Price API",
+      "url": "https://api.binance.com/api/v3/ticker/price",
+      "purpose": "Fetching public Binance spot prices to estimate USD value for Spot account asset balances",
+      "critical": false
+    },
+    {
+      "name": "Binance Spot Testnet API",
+      "url": "https://testnet.binance.vision",
+      "purpose": "Testing Binance Spot API account and price sync with user-provided testnet API keys",
+      "critical": false
+    },
+    {
+      "name": "OKX V5 Trading Account Balance API",
+      "url": "https://www.okx.com/api/v5/account/balance",
+      "purpose": "Fetching read-only OKX trading account balances from user-provided API keys stored locally",
+      "critical": false
+    },
+    {
+      "name": "OKX V5 Funding Balance API",
+      "url": "https://www.okx.com/api/v5/asset/balances",
+      "purpose": "Fetching read-only OKX funding account balances from user-provided API keys stored locally",
+      "critical": false
+    },
+    {
+      "name": "OKX V5 Spot Tickers API",
+      "url": "https://www.okx.com/api/v5/market/tickers",
+      "purpose": "Fetching public OKX spot prices to estimate USD value for OKX funding asset balances",
+      "critical": false
     }
   ]
 }

@@ -2,6 +2,10 @@ export type Language = 'ru' | 'en';
 
 export const translations = {
   ru: {
+    createAccountAction: 'Create Account',
+    toolCreateAccount: 'Create account {accountName} with {amount} {currency}',
+    toolCreateAccountIntro: 'I recognized a new account creation command. Please review and confirm the details:',
+    currencyLabel: 'Currency',
     // HomeScreen
     error: 'Ошибка',
     success: 'Успех',
@@ -44,6 +48,7 @@ export const translations = {
     // AccountsScreen
     addWallet: '➕ Добавить кошелек',
     connectBybit: '➕ Подключить Bybit',
+    connectExchange: 'Подключить биржу',
     connectedAccounts: 'Подключенные счета',
     syncAll: '🔄 Синхронизировать все',
     tapToViewHistory: 'Нажмите, чтобы посмотреть историю',
@@ -66,8 +71,11 @@ export const translations = {
     syncError: 'Ошибка синхронизации',
     syncErrorDesc: 'Не удалось синхронизировать баланс счета.',
     bybitSuccess: 'Подключение к Bybit добавлено и синхронизировано успешно!',
+    exchangeSuccess: 'Подключение к {exchange} добавлено и синхронизировано успешно!',
     exchangeApi: 'Exchange API',
     bybitApiLabel: 'Bybit V5 API',
+    binanceApiLabel: 'Binance Global API',
+    okxApiLabel: 'OKX V5 API',
 
     // Add Wallet Modal
     newWalletNameLabel: 'Название кошелька',
@@ -79,14 +87,20 @@ export const translations = {
     // Connect Exchange Modal
     exchangeLabel: 'Название подключения',
     exchangePlaceholder: 'например: Мой основной аккаунт',
+    connectExchangeTitle: 'Подключение биржи {exchange}',
+    exchangeProviderLabel: 'Биржа',
     apiKeyLabel: 'API Key',
+    apiKeyPlaceholder: 'Введите API Key {exchange}',
     apiSecretLabel: 'API Secret',
+    apiSecretPlaceholder: 'Введите API Secret {exchange}',
+    apiPassphraseLabel: 'API Passphrase',
+    apiPassphrasePlaceholder: 'Введите OKX API Passphrase',
     testnetLabel: 'Использовать Testnet (демо-сеть)',
     testingConnection: 'Тестирование...',
     connectButton: 'Подключить аккаунт',
     validationExchangeDesc: 'Пожалуйста, заполните все поля.',
     exchangeConnError: 'Ошибка подключения',
-    exchangeConnErrorDesc: 'Не удалось проверить или сохранить подключение к Bybit. Проверьте ключи API и интернет-соединение.',
+    exchangeConnErrorDesc: 'Не удалось проверить или сохранить подключение к {exchange}. Проверьте ключи API и интернет-соединение.',
 
     // ChatScreen
     chatWelcome: 'Привет! Я Muffin, твой приватный финансовый ассистент. 🏦\n\nВы можете загрузить скриншот приложения банка или криптокошелька через 📎. Все данные обрабатываются локально.\n\nВы также можете давать мне голосовые или текстовые команды. Вот стандартные форматы:\n• Установка баланса: "На Bybit пятьсот долларов" или "Баланс Kaspi Gold теперь 50000 тенге"\n• Списание: "Потратил 1500 рублей с Bybit Card" или "Минус 20 долларов с наличных"\n• Пополнение: "Добавь 5000 тенге на Kaspi Gold" или "Плюс 100 долларов"\n• Цели: "Хочу накопить 5000 долларов" или "Сколько осталось до цели?"',
@@ -156,6 +170,10 @@ export const translations = {
     toolGoalIntro: 'Я распознал команду для изменения цели. Пожалуйста, проверьте и подтвердите детали:',
   },
   en: {
+    createAccountAction: 'Create Account',
+    toolCreateAccount: 'Create account {accountName} with {amount} {currency}',
+    toolCreateAccountIntro: 'I recognized a new account creation command. Please review and confirm the details:',
+    currencyLabel: 'Currency',
     // HomeScreen
     error: 'Error',
     success: 'Success',
@@ -198,6 +216,7 @@ export const translations = {
     // AccountsScreen
     addWallet: '➕ Add Wallet',
     connectBybit: '➕ Connect Bybit',
+    connectExchange: 'Connect Exchange',
     connectedAccounts: 'Connected Accounts',
     syncAll: '🔄 Sync All',
     tapToViewHistory: 'Tap to view history',
@@ -220,8 +239,11 @@ export const translations = {
     syncError: 'Sync Error',
     syncErrorDesc: 'Failed to sync account balance.',
     bybitSuccess: 'Bybit connection added and synchronized successfully!',
+    exchangeSuccess: '{exchange} connection added and synchronized successfully!',
     exchangeApi: 'Exchange API',
     bybitApiLabel: 'Bybit V5 API',
+    binanceApiLabel: 'Binance Global API',
+    okxApiLabel: 'OKX V5 API',
 
     // Add Wallet Modal
     newWalletNameLabel: 'Wallet Name',
@@ -233,14 +255,20 @@ export const translations = {
     // Connect Exchange Modal
     exchangeLabel: 'Connection Name / Label',
     exchangePlaceholder: 'e.g. My Primary Account',
+    connectExchangeTitle: 'Connect {exchange} Exchange',
+    exchangeProviderLabel: 'Exchange',
     apiKeyLabel: 'API Key',
+    apiKeyPlaceholder: 'Enter {exchange} API Key',
     apiSecretLabel: 'API Secret',
+    apiSecretPlaceholder: 'Enter {exchange} API Secret',
+    apiPassphraseLabel: 'API Passphrase',
+    apiPassphrasePlaceholder: 'Enter OKX API Passphrase',
     testnetLabel: 'Use Testnet (demo environment)',
     testingConnection: 'Testing...',
     connectButton: 'Connect Account',
     validationExchangeDesc: 'Please fill in all fields.',
     exchangeConnError: 'Connection Error',
-    exchangeConnErrorDesc: 'Failed to test or save Bybit connection. Check your keys and internet connection.',
+    exchangeConnErrorDesc: 'Failed to test or save {exchange} connection. Check your keys and internet connection.',
 
     // ChatScreen
     chatWelcome: 'Hi! I am Muffin, your private financial assistant. 🏦\n\nYou can upload a screenshot of any bank app or crypto wallet using 📎. All OCR data is processed locally.\n\nYou can also speak or type commands. Here are the standard formats:\n• Set balance: "On Bybit five hundred dollars" or "My Kaspi Gold balance is now 50000 KZT"\n• Spend: "Spent 1500 RUB from Bybit Card" or "Minus 20 dollars from Cash"\n• Add: "Add 5000 KZT to Kaspi Gold" or "Plus 100 dollars"\n• Goals: "Set savings goal to 5000 USD" or "How much is left until my goal?"',
