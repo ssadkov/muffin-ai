@@ -7,6 +7,7 @@ import { fetchOkxBalance } from '../services/okxService';
 export { getRatesMap };
 
 export type OwnerType = 'personal' | 'company';
+export type AccountType = 'bank' | 'cash' | 'card' | 'crypto_wallet' | 'other';
 
 export type PaymentObligationInput = {
   id?: string;
@@ -187,6 +188,55 @@ export function createWalletAccount(name: string, source: string, address: strin
   );
   
   return id;
+}
+
+export function createManualAccount(input: {
+  name: string;
+  type: AccountType;
+  ownerType: OwnerType;
+  ownershipPercent: number;
+  amount: number;
+  currency: string;
+  modelNote?: string;
+  address?: string;
+  source?: string;
+}) {
+  const now = new Date().toISOString();
+  const trimmedName = input.name.trim();
+  if (!trimmedName) {
+    throw new Error('Account name is required');
+  }
+
+  const normalizedCurrency = normalizeCurrency(input.currency);
+  const safeAmount = Number.isFinite(input.amount) ? input.amount : 0;
+  const safeOwnership = Math.max(0, Math.min(100, Number.isFinite(input.ownershipPercent) ? input.ownershipPercent : 100));
+  const id = 'acc_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  const source = input.source || 'manual';
+
+  executeSql(
+    'INSERT INTO accounts (id, name, type, owner_type, model_note, ownership_percent, source, currency, address, app_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [
+      id,
+      trimmedName,
+      input.type,
+      input.ownerType,
+      (input.modelNote || '').trim(),
+      safeOwnership,
+      source,
+      normalizedCurrency,
+      input.address?.trim() || null,
+      null,
+      now,
+    ]
+  );
+
+  const snapshotId = 'snap_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  executeSql(
+    'INSERT INTO balance_snapshots (id, account_id, amount, currency, usd_value, source, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [snapshotId, id, safeAmount, normalizedCurrency, estimateUsdValue(safeAmount, normalizedCurrency), source, 1.0, now]
+  );
+
+  return { accountId: id, snapshotId };
 }
 
 export function listAccounts() {
@@ -615,10 +665,29 @@ export async function deleteExchangeConnection(accountId: string): Promise<void>
   // 2. Delete from exchange_connections
   executeSql('DELETE FROM exchange_connections WHERE id = ?', [connectionId]);
 
-  // 3. Delete balance snapshots associated with account
+  // 3. Clear payment links that pointed at this account
+  executeSql('UPDATE payment_obligations SET account_id = NULL WHERE account_id = ?', [accountId]);
+
+  // 4. Delete balance snapshots associated with account
   executeSql('DELETE FROM balance_snapshots WHERE account_id = ?', [accountId]);
 
-  // 4. Delete account
+  // 5. Delete account
+  executeSql('DELETE FROM accounts WHERE id = ?', [accountId]);
+}
+
+export async function deleteAccount(accountId: string): Promise<void> {
+  const account = getFirst('SELECT id, type FROM accounts WHERE id = ?', [accountId]);
+  if (!account) {
+    throw new Error(`Account not found: ${accountId}`);
+  }
+
+  if (account.type === 'exchange' && accountId.startsWith('acc_ex_')) {
+    await deleteExchangeConnection(accountId);
+    return;
+  }
+
+  executeSql('UPDATE payment_obligations SET account_id = NULL WHERE account_id = ?', [accountId]);
+  executeSql('DELETE FROM balance_snapshots WHERE account_id = ?', [accountId]);
   executeSql('DELETE FROM accounts WHERE id = ?', [accountId]);
 }
 

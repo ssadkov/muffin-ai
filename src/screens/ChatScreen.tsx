@@ -1,17 +1,19 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { 
   View, 
   Text, 
   TextInput, 
   TouchableOpacity, 
   FlatList, 
+  ScrollView,
   StyleSheet, 
   KeyboardAvoidingView, 
   Platform, 
   ActivityIndicator, 
   Keyboard,
   Alert,
-  Image
+  Image,
+  Modal
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -21,16 +23,18 @@ import ProgressRing from '../components/ProgressRing';
 import StatusChip from '../components/StatusChip';
 import TypingDots from '../components/TypingDots';
 import ThinkingBox from '../components/ThinkingBox';
+import { AiContext } from '../agent/aiContext';
 import { askMuffinAi, continueMuffinAi } from '../agent/muffinAiAgent';
 import { extractBalanceAccountNameHint, findMatchingAccount, parseFinanceCommand } from '../agent/commandParser';
-import { downloadModelIfNeeded, initLocalModel, checkModelExists, isModelLoaded, InferenceStats } from '../services/qvacService';
+import { downloadModelIfNeeded, initLocalModel, checkModelExists, isModelLoaded, unloadLocalModel, deleteLocalModelFile, getModelLocalPath, InferenceStats } from '../services/qvacService';
+import { ModelId, MODEL_CATALOG, MODEL_IDS, DEFAULT_MODEL_ID } from '../services/modelCatalog';
 import { recognizeImageText, parseBalanceFromOcrText } from '../services/ocrService';
-import { upsertAccountBalance, executeBalanceUpdate, getLatestBalances, updateGoal, getSetting } from '../tools/databaseTools';
+import { upsertAccountBalance, executeBalanceUpdate, getLatestBalances, updateGoal, getSetting, setSetting } from '../tools/databaseTools';
 import { getBitcoinPrice } from '../tools/cryptoApiTools';
 import * as ImagePicker from 'expo-image-picker';
 import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
 import { downloadWhisperModelIfNeeded, initWhisperModel, transcribeAudio, isWhisperModelLoaded } from '../services/transcriptionService';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { t, Language } from '../localization/localization';
 
 interface Message {
@@ -47,7 +51,7 @@ interface Message {
   };
   // Tool call state
   isToolCall?: boolean;
-  toolCallType?: 'BTC_PRICE' | 'CREATE_ACCOUNT' | 'UPDATE_BALANCE' | 'UPDATE_GOAL';
+  toolCallType?: 'BTC_PRICE' | 'CREATE_ACCOUNT' | 'UPDATE_BALANCE' | 'RENAME_ACCOUNT' | 'UPDATE_GOAL';
   toolCallData?: any;
   toolCallStatus?: 'pending' | 'running' | 'completed' | 'cancelled';
   countdown?: number;
@@ -56,11 +60,15 @@ interface Message {
   sourceQuestion?: string;
   // QVAC on-device inference telemetry, shown as a badge under the answer.
   stats?: InferenceStats;
+  // Tappable follow-up chips when the router was unsure what the user meant.
+  clarifications?: { label: string; prompt: string }[];
 }
 
 const TOOL_COUNTDOWN_SECONDS = 5;
 
-type ToolType = 'BTC_PRICE' | 'CREATE_ACCOUNT' | 'UPDATE_BALANCE' | 'UPDATE_GOAL';
+type ToolType = 'BTC_PRICE' | 'CREATE_ACCOUNT' | 'UPDATE_BALANCE' | 'RENAME_ACCOUNT' | 'UPDATE_GOAL';
+
+type ModelFileStatus = Record<ModelId, { exists: boolean; loaded: boolean }>;
 
 type ResolvedBalanceMutation =
   | {
@@ -86,8 +94,17 @@ const TOOL_META: Record<ToolType, { icon: keyof typeof Ionicons.glyphMap; color:
   BTC_PRICE: { icon: 'logo-bitcoin', color: '#F7931A', soft: 'rgba(247, 147, 26, 0.14)' },
   CREATE_ACCOUNT: { icon: 'add-circle-outline', color: colors.info, soft: colors.infoSoft },
   UPDATE_BALANCE: { icon: 'wallet-outline', color: colors.accent, soft: colors.accentSoft },
+  RENAME_ACCOUNT: { icon: 'create-outline', color: colors.info, soft: colors.infoSoft },
   UPDATE_GOAL: { icon: 'flag-outline', color: colors.info, soft: colors.infoSoft },
 };
+
+const GLOBAL_DEMO_PROMPTS = [
+  'How much do I have on Aptos?',
+  'How many Aptos wallets do I have?',
+  'What is my total crypto portfolio?',
+  'How much is left until my goal?',
+  'Can I cover upcoming payments?',
+];
 
 const parseModelResponse = (text: string) => {
   if (!text) return { thinking: null, response: '' };
@@ -120,13 +137,26 @@ export default function ChatScreen() {
     });
   };
 
-  const activeModel = 'qwen';
+  const [activeModel, setActiveModel] = useState<ModelId>(() => {
+    const saved = getSetting('model', DEFAULT_MODEL_ID);
+    return (MODEL_IDS as string[]).includes(saved) ? (saved as ModelId) : DEFAULT_MODEL_ID;
+  });
 
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<number>(0);
-  const [isModelReady, setIsModelReady] = useState(isModelLoaded('qwen'));
+  const [downloadedBytes, setDownloadedBytes] = useState<number>(0);
+  const [isModelDownloading, setIsModelDownloading] = useState(false);
+  const [isModelReady, setIsModelReady] = useState(isModelLoaded(activeModel));
   const [isInitializing, setIsInitializing] = useState(false);
+  const [isModelSettingsVisible, setIsModelSettingsVisible] = useState(false);
+  const [modelBusyId, setModelBusyId] = useState<ModelId | null>(null);
+  const [modelStatuses, setModelStatuses] = useState<ModelFileStatus>(() => (
+    MODEL_IDS.reduce((acc, id) => {
+      acc[id] = { exists: false, loaded: isModelLoaded(id) };
+      return acc;
+    }, {} as ModelFileStatus)
+  ));
   const flatListRef = useRef<FlatList>(null);
   
   // Track active countdown timers so they can be cancelled
@@ -141,10 +171,12 @@ export default function ChatScreen() {
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
 
   const isFocused = useIsFocused();
+  const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
   const [lang, setLang] = useState<Language>('ru');
   const [existingAccounts, setExistingAccounts] = useState<any[]>([]);
+  const demoPrompts = GLOBAL_DEMO_PROMPTS;
 
   const getDisplayedText = (text: string) => {
     const { response } = parseModelResponse(text);
@@ -156,6 +188,9 @@ export default function ChatScreen() {
       }
       if (cleanResponse.includes('UPDATE_BALANCE')) {
         return t('toolBalanceIntro', lang);
+      }
+      if (cleanResponse.includes('RENAME_ACCOUNT')) {
+        return lang === 'ru' ? 'Rename account' : 'Rename account';
       }
       if (cleanResponse.includes('UPDATE_GOAL')) {
         return t('toolGoalIntro', lang);
@@ -190,36 +225,193 @@ export default function ChatScreen() {
     }
   }, [isFocused]);
 
+  const resolveQuestionContext = (_text: string): AiContext | null => {
+    // Intent routing now handles account/chain scope from the question itself.
+    // We no longer auto-bind a single account from a keyword match — that made a
+    // multi-wallet question ("how many Aptos wallets") collapse to one wallet.
+    // Context is only set deliberately via the "Ask" button on the Accounts screen.
+    return null;
+  };
+
+  const applyDemoPrompt = (prompt: string) => {
+    if (isLoading || isRecording || isWhisperDownloading || isWhisperInitializing) return;
+    setInputText(prompt);
+  };
+
+  const refreshModelStatuses = async () => {
+    const entries = await Promise.all(
+      MODEL_IDS.map(async (id) => [
+        id,
+        {
+          exists: await checkModelExists(id),
+          loaded: isModelLoaded(id),
+        },
+      ] as const)
+    );
+    setModelStatuses(Object.fromEntries(entries) as ModelFileStatus);
+  };
+
   useEffect(() => {
-    async function setupModel() {
-      if (isModelLoaded('qwen')) {
-        setIsModelReady(true);
+    refreshModelStatuses();
+  }, [activeModel, isModelReady, isModelSettingsVisible]);
+
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity
+          style={styles.headerIconButton}
+          onPress={() => setIsModelSettingsVisible(true)}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="settings-outline" size={20} color={colors.textPrimary} />
+        </TouchableOpacity>
+      ),
+    });
+  }, [navigation]);
+
+  const handleDownloadModel = async (id: ModelId) => {
+    setModelBusyId(id);
+    setIsModelDownloading(true);
+    setDownloadProgress(0);
+    setDownloadedBytes(0);
+    try {
+      await downloadModelIfNeeded(id, (progress, written) => {
+        setDownloadProgress(progress);
+        setDownloadedBytes(written || 0);
+      });
+      await refreshModelStatuses();
+    } catch (e) {
+      console.error(e);
+      Alert.alert(t('error', lang), lang === 'ru' ? 'Не удалось скачать модель.' : 'Failed to download the model.');
+    } finally {
+      setIsModelDownloading(false);
+      setModelBusyId(null);
+    }
+  };
+
+  const handleLoadModel = async (id: ModelId) => {
+    setModelBusyId(id);
+    setIsInitializing(true);
+    try {
+      const exists = await checkModelExists(id);
+      if (!exists) {
+        Alert.alert(
+          lang === 'ru' ? 'Модель не скачана' : 'Model not downloaded',
+          lang === 'ru' ? 'Сначала скачайте файл модели.' : 'Download the model file first.'
+        );
         return;
       }
+
+      if (id !== activeModel) {
+        await unloadLocalModel(activeModel).catch(() => {});
+        setSetting('model', id);
+        setActiveModel(id);
+      }
+
+      await initLocalModel(getModelLocalPath(id), id);
+      setIsModelReady(true);
+      await refreshModelStatuses();
+    } catch (e) {
+      console.error(e);
+      Alert.alert(t('error', lang), lang === 'ru' ? 'Не удалось загрузить модель в память.' : 'Failed to load the model.');
+    } finally {
+      setIsInitializing(false);
+      setModelBusyId(null);
+    }
+  };
+
+  const confirmDeleteModel = (id: ModelId) => {
+    const spec = MODEL_CATALOG[id];
+    Alert.alert(
+      lang === 'ru' ? 'Удалить файл модели?' : 'Delete model file?',
+      lang === 'ru'
+        ? `Удалить ${spec.label} (${spec.sizeLabel}) с устройства? Потом её нужно будет скачать заново.`
+        : `Delete ${spec.label} (${spec.sizeLabel}) from this device? You will need to download it again later.`,
+      [
+        { text: t('cancel', lang), style: 'cancel' },
+        {
+          text: lang === 'ru' ? 'Удалить' : 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setModelBusyId(id);
+            try {
+              await deleteLocalModelFile(id);
+              if (id === activeModel) {
+                setIsModelReady(false);
+              }
+              await refreshModelStatuses();
+            } catch (e) {
+              console.error(e);
+              Alert.alert(t('error', lang), lang === 'ru' ? 'Не удалось удалить модель.' : 'Failed to delete the model.');
+            } finally {
+              setModelBusyId(null);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // Download + load whichever model is active. Re-runs when the user switches
+  // models in the picker; `cancelled` guards against a stale switch landing late.
+  useEffect(() => {
+    let cancelled = false;
+    async function setupModel() {
+      if (isModelLoaded(activeModel)) {
+        if (!cancelled) setIsModelReady(true);
+        return;
+      }
+      if (!cancelled) {
+        setIsModelReady(false);
+        setDownloadProgress(0);
+        setDownloadedBytes(0);
+        setIsModelDownloading(false);
+        setIsInitializing(false);
+      }
       try {
-        const exists = await checkModelExists('qwen');
-        if (exists) {
-          setIsInitializing(true);
+        const activeModelFileExists = await checkModelExists(activeModel);
+        if (!activeModelFileExists) {
+          if (!cancelled) setIsModelDownloading(true);
         }
-        const modelPath = await downloadModelIfNeeded('qwen', (progress) => {
+        const modelPath = await downloadModelIfNeeded(activeModel, (progress, written) => {
+          if (cancelled) return;
           setDownloadProgress(progress);
-          if (progress < 100) {
-            setIsInitializing(false);
-          } else {
-            setIsInitializing(true);
-          }
+          setDownloadedBytes(written || 0);
         });
+        if (cancelled) return;
+        // Download finished — now the (slow for 8B) load into RAM begins.
+        setIsModelDownloading(false);
         setIsInitializing(true);
-        await initLocalModel(modelPath, 'qwen');
-        setIsModelReady(true);
+        await initLocalModel(modelPath, activeModel);
+        if (!cancelled) setIsModelReady(true);
       } catch (e) {
         console.error("Model setup error:", e);
       } finally {
-        setIsInitializing(false);
+        if (!cancelled) setIsModelDownloading(false);
+        if (!cancelled) setIsInitializing(false);
+        if (!cancelled) refreshModelStatuses();
       }
     }
     setupModel();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeModel]);
 
+  // Switch the active LLM: persist the choice, free the previous model's RAM,
+  // then flip state so the setup effect loads (and downloads if needed) the new one.
+  const handleSelectModel = async (id: ModelId) => {
+    if (id === activeModel || isLoading || isInitializing || isModelDownloading || modelBusyId) return;
+    const previous = activeModel;
+    setSetting('model', id);
+    setIsModelReady(false);
+    // Free the previous model's RAM *before* the setup effect loads the new one,
+    // so an 8B never has to coexist with a 3B on the device.
+    await unloadLocalModel(previous).catch(() => {});
+    setActiveModel(id);
+  };
+
+  useEffect(() => {
     return () => {
       // Clear all active timers on unmount
       Object.values(activeTimersRef.current).forEach(clearInterval);
@@ -333,16 +525,13 @@ export default function ChatScreen() {
 
     const question = (userQuestion || '').trim();
     if (question) {
-      const parsed = parseFinanceCommand(question, accounts);
+      const parsed = parseFinanceCommand(question, accounts, undefined, null);
       if (parsed?.action === 'create_account') {
-        return {
-          action: 'create',
-          data: {
-            accountName: parsed.name,
-            amount,
-            currency,
-          },
-        };
+        throw new Error('Account creation through chat is disabled');
+      }
+
+      if (parsed?.action === 'rename_account') {
+        throw new Error('Rename command cannot be executed as balance update');
       }
 
       if (parsed?.action === 'update_balance') {
@@ -377,15 +566,9 @@ export default function ChatScreen() {
 
       const accountNameHint = extractBalanceAccountNameHint(question);
       if (accountNameHint) {
-        return {
-          action: 'create',
-          data: {
-            accountName: accountNameHint,
-            amount,
-            currency,
-          },
-        };
+        throw new Error('Could not resolve existing balance target account');
       }
+
     }
 
     const proposedAccount = accounts.find((item) => item.id === data?.accountId);
@@ -404,14 +587,7 @@ export default function ChatScreen() {
 
     const proposedAccountName = String(data?.accountName || '').trim();
     if (proposedAccountName) {
-      return {
-        action: 'create',
-        data: {
-          accountName: proposedAccountName,
-          amount,
-          currency,
-        },
-      };
+      throw new Error('Account creation through chat is disabled');
     }
 
     throw new Error('Could not resolve balance target account');
@@ -444,6 +620,7 @@ export default function ChatScreen() {
 
       const cleanText = text.trim();
       if (cleanText) {
+        const requestAiContext = resolveQuestionContext(cleanText);
         // Automatically send the voice transcription as a user message
         const userMsg = { id: Date.now().toString(), text: cleanText, isUser: true };
         setMessages(prev => [...prev, userMsg]);
@@ -468,8 +645,8 @@ export default function ChatScreen() {
             }
             return m;
           }));
-        }, history);
-        await handleAiResponse(cleanText, response.message, aiMsgId, response.stats);
+        }, history, requestAiContext);
+        await handleAiResponse(cleanText, response.message, aiMsgId, response.stats, response.clarifications);
       } else {
         Alert.alert(t('noSpeechTitle', lang), t('noSpeechDesc', lang));
       }
@@ -487,9 +664,10 @@ export default function ChatScreen() {
   const sendMessage = async () => {
     if (!inputText.trim()) return;
     
-    const userMsg = { id: Date.now().toString(), text: inputText, isUser: true };
+    const originalText = inputText.trim();
+    const requestAiContext = resolveQuestionContext(originalText);
+    const userMsg = { id: Date.now().toString(), text: originalText, isUser: true };
     setMessages(prev => [...prev, userMsg]);
-    const originalText = inputText;
     setInputText('');
     setIsLoading(true);
     Keyboard.dismiss();
@@ -514,8 +692,8 @@ export default function ChatScreen() {
           }
           return m;
         }));
-      }, history);
-      await handleAiResponse(userMsg.text, response.message, aiMsgId, response.stats);
+      }, history, requestAiContext);
+      await handleAiResponse(userMsg.text, response.message, aiMsgId, response.stats, response.clarifications);
     } catch (e) {
       console.error(e);
       setMessages(prev => prev.map(m => {
@@ -529,7 +707,34 @@ export default function ChatScreen() {
     }
   };
 
-  const handleAiResponse = async (userQuestion: string, aiText: string, aiMsgId?: string, stats?: InferenceStats) => {
+  // Send a precise follow-up question when the user taps a clarification chip.
+  const sendClarification = async (prompt: string) => {
+    if (isLoading || isRecording || isWhisperDownloading || isWhisperInitializing) return;
+
+    const requestAiContext = resolveQuestionContext(prompt);
+    const userMsg = { id: Date.now().toString(), text: prompt, isUser: true };
+    setMessages(prev => [...prev, userMsg]);
+    setIsLoading(true);
+    Keyboard.dismiss();
+
+    const aiMsgId = 'ai_' + Date.now();
+    setMessages(prev => [...prev, { id: aiMsgId, text: t('aiCalculating', lang), isUser: false }]);
+
+    const history = getCleanChatHistory();
+    try {
+      const response = await askMuffinAi(prompt, activeModel, (currentText) => {
+        setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, text: currentText } : m));
+      }, history, requestAiContext);
+      await handleAiResponse(prompt, response.message, aiMsgId, response.stats, response.clarifications);
+    } catch (e) {
+      console.error(e);
+      setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, text: t('aiConnectError', lang) } : m));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleAiResponse = async (userQuestion: string, aiText: string, aiMsgId?: string, stats?: InferenceStats, clarifications?: { label: string; prompt: string }[]) => {
     if (aiText.includes('TOOL_CALL: BTC_PRICE')) {
       const msgId = Date.now().toString();
       const newMsg: Message = {
@@ -551,60 +756,15 @@ export default function ChatScreen() {
       startToolCountdown(msgId, userQuestion, 'BTC_PRICE', null);
     } 
     else if (aiText.includes('TOOL_CALL: CREATE_ACCOUNT:')) {
-      const match = aiText.match(/\[?TOOL_CALL: CREATE_ACCOUNT:\s*(\{.*?\})\]?/);
-      if (match) {
-        try {
-          const parsedToolData = JSON.parse(match[1]);
-          const toolData = {
-            accountName: String(parsedToolData.accountName || parsedToolData.name || '').trim(),
-            amount: Number(parsedToolData.amount),
-            currency: String(parsedToolData.currency || 'USD').toUpperCase(),
-          };
-          if (!toolData.accountName || !Number.isFinite(toolData.amount) || toolData.amount < 0) {
-            throw new Error('Invalid CREATE_ACCOUNT payload');
-          }
-
-          const msgId = Date.now().toString();
-          const newMsg: Message = {
-            id: msgId,
-            text: t('toolCreateAccount', lang, { accountName: toolData.accountName, amount: toolData.amount, currency: toolData.currency }),
-            isUser: false,
-            isToolCall: true,
-            toolCallType: 'CREATE_ACCOUNT',
-            toolCallData: toolData,
-            toolCallStatus: 'pending',
-            countdown: TOOL_COUNTDOWN_SECONDS,
-            rawToolCallText: aiText,
-            sourceQuestion: userQuestion,
-            stats
-          };
-
-          setMessages(prev => {
-            const updated = prev.map(m => {
-              if (m.id === aiMsgId) {
-                return { ...m, text: t('toolCreateAccountIntro', lang), isToolConfirmation: true };
-              }
-              return m;
-            });
-            return [...updated, newMsg];
-          });
-
-          startToolCountdown(msgId, userQuestion, 'CREATE_ACCOUNT', toolData);
-        } catch (e) {
-          console.error("Failed to parse create account tool call JSON", e);
-          if (aiMsgId) {
-            setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, text: aiText } : m));
-          } else {
-            setMessages(prev => [...prev, { id: Date.now().toString(), text: aiText, isUser: false }]);
-          }
-        }
+      const disabledMessage = lang === 'ru'
+        ? 'Создание счетов через чат временно отключено. Добавьте счет во вкладке Accounts.'
+        : 'Creating accounts through chat is temporarily disabled. Add the account in the Accounts tab.';
+      if (aiMsgId) {
+        setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, text: disabledMessage } : m));
       } else {
-        if (aiMsgId) {
-          setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, text: aiText } : m));
-        } else {
-          setMessages(prev => [...prev, { id: Date.now().toString(), text: aiText, isUser: false }]);
-        }
+        setMessages(prev => [...prev, { id: Date.now().toString(), text: disabledMessage, isUser: false }]);
       }
+      return;
     }
     else if (aiText.includes('TOOL_CALL: UPDATE_BALANCE:')) {
       const match = aiText.match(/\[?TOOL_CALL: UPDATE_BALANCE:\s*(\{.*?\})\]?/);
@@ -615,35 +775,7 @@ export default function ChatScreen() {
 
           const resolvedMutation = resolveBalanceMutation(userQuestion, toolData);
           if (resolvedMutation.action === 'create') {
-            const newMsg: Message = {
-              id: msgId,
-              text: t('toolCreateAccount', lang, {
-                accountName: resolvedMutation.data.accountName,
-                amount: resolvedMutation.data.amount,
-                currency: resolvedMutation.data.currency,
-              }),
-              isUser: false,
-              isToolCall: true,
-              toolCallType: 'CREATE_ACCOUNT',
-              toolCallData: resolvedMutation.data,
-              toolCallStatus: 'pending',
-              countdown: TOOL_COUNTDOWN_SECONDS,
-              rawToolCallText: aiText,
-              sourceQuestion: userQuestion,
-              stats
-            };
-
-            setMessages(prev => {
-              const updated = prev.map(m => {
-                if (m.id === aiMsgId) {
-                  return { ...m, text: t('toolCreateAccountIntro', lang), isToolConfirmation: true };
-                }
-                return m;
-              });
-              return [...updated, newMsg];
-            });
-
-            startToolCountdown(msgId, userQuestion, 'CREATE_ACCOUNT', resolvedMutation.data);
+            throw new Error('Account creation through balance commands is disabled');
             return;
           }
 
@@ -667,7 +799,6 @@ export default function ChatScreen() {
             toolCallType: 'UPDATE_BALANCE',
             toolCallData: { ...resolvedToolData, accountName },
             toolCallStatus: 'pending',
-            countdown: TOOL_COUNTDOWN_SECONDS,
             rawToolCallText: aiText,
             sourceQuestion: userQuestion,
             stats
@@ -683,7 +814,7 @@ export default function ChatScreen() {
             return [...updated, newMsg];
           });
 
-          startToolCountdown(msgId, userQuestion, 'UPDATE_BALANCE', resolvedToolData);
+          // Balance changes require explicit confirmation; no timer auto-runs money mutations.
         } catch (e) {
           console.error("Failed to parse tool call JSON", e);
           if (aiMsgId) {
@@ -700,6 +831,17 @@ export default function ChatScreen() {
         }
       }
     } 
+    else if (aiText.includes('TOOL_CALL: RENAME_ACCOUNT:')) {
+      const disabledMessage = lang === 'ru'
+        ? 'Переименование счетов через чат временно отключено. Используйте Configure у счета.'
+        : 'Renaming accounts through chat is temporarily disabled. Use Configure on the account.';
+      if (aiMsgId) {
+        setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, text: disabledMessage } : m));
+      } else {
+        setMessages(prev => [...prev, { id: Date.now().toString(), text: disabledMessage, isUser: false }]);
+      }
+      return;
+    }
     else if (aiText.includes('TOOL_CALL: UPDATE_GOAL:')) {
       const match = aiText.match(/\[?TOOL_CALL: UPDATE_GOAL:\s*(\{.*?\})\]?/);
       if (match) {
@@ -750,9 +892,9 @@ export default function ChatScreen() {
     }
     else {
       if (aiMsgId) {
-        setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, text: aiText, stats } : m));
+        setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, text: aiText, stats, clarifications } : m));
       } else {
-        setMessages(prev => [...prev, { id: Date.now().toString(), text: aiText, isUser: false, stats }]);
+        setMessages(prev => [...prev, { id: Date.now().toString(), text: aiText, isUser: false, stats, clarifications }]);
       }
     }
 
@@ -784,7 +926,36 @@ export default function ChatScreen() {
     activeTimersRef.current[msgId] = intervalId;
   };
 
-  const cancelToolCall = async (msgId: string, userQuestion: string, type: string) => {
+  const buildCancelMessage = (type: string): string => {
+    if (type === 'UPDATE_BALANCE') {
+      return lang === 'ru'
+        ? 'Отменено. Баланс не изменён.'
+        : 'Cancelled. No balance changes were made.';
+    }
+    if (type === 'CREATE_ACCOUNT') {
+      return lang === 'ru'
+        ? 'Отменено. Новый счёт не создан.'
+        : 'Cancelled. No account was created.';
+    }
+    if (type === 'RENAME_ACCOUNT') {
+      return lang === 'ru'
+        ? 'Отменено. Название счёта не изменено.'
+        : 'Cancelled. The account name was not changed.';
+    }
+    if (type === 'UPDATE_GOAL') {
+      return lang === 'ru'
+        ? 'Отменено. Цель не изменена.'
+        : 'Cancelled. The goal was not changed.';
+    }
+    return lang === 'ru' ? 'Отменено.' : 'Cancelled.';
+  };
+
+  const cancelToolCall = (msgId: string, _userQuestion: string, type: string) => {
+    const target = globalChatHistory.find(m => m.id === msgId);
+    if (!target || target.toolCallStatus === 'cancelled' || target.toolCallStatus === 'completed') {
+      return;
+    }
+
     const timerId = activeTimersRef.current[msgId];
     if (timerId) {
       clearInterval(timerId);
@@ -793,51 +964,17 @@ export default function ChatScreen() {
 
     setMessages(prev => prev.map(m => {
       if (m.id === msgId) {
-        return { ...m, toolCallStatus: 'cancelled', text: t('actionCancelled', lang, { action: m.text }) };
+        return { ...m, toolCallStatus: 'cancelled', countdown: undefined };
       }
       return m;
     }));
 
-    setIsLoading(true);
-    
-    const aiMsgId = 'ai_' + Date.now();
-    const placeholder = t('aiCalculating', lang);
-      
-    setMessages(prev => [...prev, { 
-      id: aiMsgId, 
-      text: placeholder, 
+    setMessages(prev => [...prev, {
+      id: 'ai_cancel_' + Date.now(),
+      text: buildCancelMessage(type),
       isUser: false,
-      isToolConfirmation: true
+      isToolConfirmation: true,
     }]);
-
-    try {
-      const history = getCleanChatHistory();
-      const response = await continueMuffinAi(
-        userQuestion, 
-        `SYSTEM: The user cancelled the ${type} tool execution. Please confirm the cancellation to the user.`,
-        activeModel,
-        (currentText) => {
-          setMessages(prev => prev.map(m => {
-            if (m.id === aiMsgId) {
-              return { ...m, text: currentText };
-            }
-            return m;
-          }));
-        },
-        history
-      );
-      await handleAiResponse(userQuestion, response.message, aiMsgId, response.stats);
-    } catch (e) {
-      console.error(e);
-      setMessages(prev => prev.map(m => {
-        if (m.id === aiMsgId) {
-          return { ...m, text: t('aiCancelConfirmError', lang) };
-        }
-        return m;
-      }));
-    } finally {
-      setIsLoading(false);
-    }
   };
 
   const formatNumber = (value: number) => {
@@ -876,12 +1013,26 @@ export default function ChatScreen() {
         : `Done: created ${result.accountName} with ${formatNumber(result.amount)} ${result.currency} (≈ $${formatNumber(result.usdValue)}).`;
     }
 
+    if (type === 'RENAME_ACCOUNT') {
+      return `Done: renamed ${result.oldName} to ${result.newName}.`;
+    }
+
     return lang === 'ru'
       ? `Готово. Цель обновлена: ${result.title}, ${formatNumber(result.targetValue)} ${result.currency}.`
       : `Done. Goal updated: ${result.title}, ${formatNumber(result.targetValue)} ${result.currency}.`;
   };
 
   const executeToolAction = async (msgId: string, userQuestion: string, type: ToolType, data: any) => {
+    const target = globalChatHistory.find(m => m.id === msgId);
+    if (
+      target &&
+      (target.toolCallStatus === 'cancelled' ||
+        target.toolCallStatus === 'completed' ||
+        target.toolCallStatus === 'running')
+    ) {
+      return;
+    }
+
     setMessages(prev => prev.map(m => {
       if (m.id === msgId) {
         return { ...m, toolCallStatus: 'running' };
@@ -901,23 +1052,7 @@ export default function ChatScreen() {
       else if (type === 'UPDATE_BALANCE') {
         const resolvedMutation = resolveBalanceMutation(userQuestion, data);
         if (resolvedMutation.action === 'create') {
-          effectiveType = 'CREATE_ACCOUNT';
-          effectiveData = resolvedMutation.data;
-          const saved = upsertAccountBalance(
-            resolvedMutation.data.accountName,
-            resolvedMutation.data.amount,
-            resolvedMutation.data.currency,
-            undefined,
-            undefined,
-            'manual'
-          );
-          result = {
-            accountName: resolvedMutation.data.accountName,
-            amount: resolvedMutation.data.amount,
-            currency: resolvedMutation.data.currency,
-            usdValue: saved.usdValue,
-          };
-          setExistingAccounts(getLatestBalances());
+          throw new Error('Account creation through balance commands is disabled');
         } else {
           effectiveData = resolvedMutation.data;
           result = executeBalanceUpdate(
@@ -929,20 +1064,10 @@ export default function ChatScreen() {
         }
       }
       else if (type === 'CREATE_ACCOUNT') {
-        const accountName = String(data.accountName || '').trim();
-        const amount = Number(data.amount);
-        const currency = String(data.currency || 'USD').toUpperCase();
-        if (!accountName || !Number.isFinite(amount) || amount < 0) {
-          throw new Error('Invalid account name or amount');
-        }
-        const saved = upsertAccountBalance(accountName, amount, currency, undefined, undefined, 'manual');
-        result = {
-          accountName,
-          amount,
-          currency,
-          usdValue: saved.usdValue,
-        };
-        setExistingAccounts(getLatestBalances());
+        throw new Error('Account creation through chat is disabled');
+      }
+      else if (type === 'RENAME_ACCOUNT') {
+        throw new Error('Account rename through chat is disabled');
       }
       else if (type === 'UPDATE_GOAL') {
         result = updateGoal(data.targetValue, data.title, data.currency);
@@ -1194,6 +1319,9 @@ export default function ChatScreen() {
         currency: item.toolCallData.currency || 'USD',
       });
     }
+    if (item.toolCallType === 'RENAME_ACCOUNT' && item.toolCallData) {
+      return `Rename ${item.toolCallData.accountName} to ${item.toolCallData.newName}`;
+    }
     return item.text;
   };
 
@@ -1201,6 +1329,13 @@ export default function ChatScreen() {
   // answer. Each pill is independent so missing engine stats just drop out.
   const buildStatsPills = (stats: InferenceStats): string[] => {
     const pills: string[] = [];
+    // Answers resolved purely from local SQLite — no model inference at all.
+    // This is an honest, stronger on-device story than any tok/s number.
+    if (stats.instant) {
+      pills.push(lang === 'ru' ? 'мгновенно' : 'instant');
+      pills.push(lang === 'ru' ? 'без вызова модели' : '0 inference');
+      return pills;
+    }
     if (stats.backendDevice === 'gpu') {
       pills.push(lang === 'ru' ? 'GPU' : 'GPU');
     } else if (stats.backendDevice === 'cpu') {
@@ -1259,7 +1394,9 @@ export default function ChatScreen() {
                     ? t('goalUpdate', lang)
                     : item.toolCallType === 'CREATE_ACCOUNT'
                       ? t('createAccountAction', lang)
-                      : t('balanceAction', lang)}
+                      : item.toolCallType === 'RENAME_ACCOUNT'
+                        ? 'Rename account'
+                        : t('balanceAction', lang)}
               </Text>
               {statusChip && (
                 <View style={styles.toolHeaderChip}>
@@ -1508,6 +1645,53 @@ export default function ChatScreen() {
               </View>
             )}
 
+            {item.toolCallType === 'RENAME_ACCOUNT' && item.toolCallStatus === 'pending' && item.toolCallData && (
+              <View style={styles.ocrEditContainer}>
+                <Text style={styles.ocrSectionTitle}>New account name</Text>
+                <TextInput
+                  style={styles.ocrTextInput}
+                  value={String(item.toolCallData.newName || '')}
+                  onChangeText={(text) => {
+                    stopTimer(item.id);
+                    setMessages(prev => prev.map(m => {
+                      if (m.id === item.id && m.toolCallData) {
+                        return {
+                          ...m,
+                          countdown: undefined,
+                          toolCallData: {
+                            ...m.toolCallData,
+                            newName: text
+                          }
+                        };
+                      }
+                      return m;
+                    }));
+                  }}
+                />
+
+                <View style={styles.confirmButtonsContainer}>
+                  <TouchableOpacity
+                    style={[styles.confirmButton, styles.yesButton]}
+                    onPress={() => {
+                      stopTimer(item.id);
+                      executeToolAction(item.id, item.sourceQuestion || messages[messages.length - 2]?.text || '', 'RENAME_ACCOUNT', item.toolCallData);
+                    }}
+                  >
+                    <Text style={styles.confirmButtonText}>{t('confirmButton', lang)}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.confirmButton, styles.noButton]}
+                    onPress={() => {
+                      stopTimer(item.id);
+                      cancelToolCall(item.id, item.sourceQuestion || messages[messages.length - 2]?.text || '', 'RENAME_ACCOUNT');
+                    }}
+                  >
+                    <Text style={styles.confirmButtonText}>{t('cancel', lang)}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
             {item.toolCallType === 'UPDATE_GOAL' && item.toolCallStatus === 'pending' && item.toolCallData && (
               <View style={styles.ocrEditContainer}>
                 <Text style={styles.ocrSectionTitle}>{t('goalNameLabel', lang)}</Text>
@@ -1628,6 +1812,20 @@ export default function ChatScreen() {
 
           {!item.isUser && !showTyping && item.stats && renderStatsBadge(item.stats)}
 
+          {!item.isUser && !showTyping && item.clarifications && item.clarifications.length > 0 && (
+            <View style={styles.chipsContainer}>
+              {item.clarifications.map((c, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={styles.chip}
+                  onPress={() => sendClarification(c.prompt)}
+                >
+                  <Text style={styles.chipText}>{c.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
           {item.isPendingOcrConfirm && item.ocrData && (
             <View style={styles.ocrEditContainer}>
               <Text style={styles.ocrSectionTitle}>{t('assignToAccount', lang)}</Text>
@@ -1704,32 +1902,185 @@ export default function ChatScreen() {
     );
   };
 
+  const renderModelSettingsModal = () => (
+    <Modal
+      visible={isModelSettingsVisible}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setIsModelSettingsVisible(false)}
+    >
+      <TouchableOpacity
+        style={styles.settingsOverlay}
+        activeOpacity={1}
+        onPress={() => setIsModelSettingsVisible(false)}
+      >
+        <TouchableOpacity activeOpacity={1} style={styles.settingsPanel}>
+          <View style={styles.settingsHeader}>
+            <View>
+              <Text style={styles.settingsTitle}>{lang === 'ru' ? 'Модели' : 'Models'}</Text>
+              <Text style={styles.settingsSubtitle}>
+                {lang === 'ru' ? 'Файлы и загрузка в память' : 'Files and RAM loading'}
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.settingsCloseButton} onPress={() => setIsModelSettingsVisible(false)}>
+              <Ionicons name="close" size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.modelSettingsList}>
+            {MODEL_IDS.map((id) => {
+              const spec = MODEL_CATALOG[id];
+              const status = modelStatuses[id] || { exists: false, loaded: false };
+              const isActive = id === activeModel;
+              const isBusy = modelBusyId === id || (isActive && (isModelDownloading || isInitializing));
+              const progressText = isBusy && (isModelDownloading || downloadedBytes > 0)
+                ? `${(downloadedBytes / 1e9).toFixed(2)} ${lang === 'ru' ? 'ГБ' : 'GB'}`
+                : null;
+
+              return (
+                <View key={id} style={[styles.modelSettingsRow, isActive && styles.modelSettingsRowActive]}>
+                  <View style={styles.modelSettingsTop}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.modelSettingsName}>{spec.label}</Text>
+                      <Text style={styles.modelSettingsHint}>{spec.hint} - {spec.sizeLabel}</Text>
+                    </View>
+                    <View style={styles.modelStatusPills}>
+                      {isActive && <StatusChip label="Active" tone="success" icon="checkmark-circle" />}
+                      {status.loaded && <StatusChip label="Loaded" tone="info" icon="flash" />}
+                      <StatusChip
+                        label={status.exists ? 'File' : 'Missing'}
+                        tone={status.exists ? 'neutral' : 'danger'}
+                        icon={status.exists ? 'document' : 'cloud-download'}
+                      />
+                    </View>
+                  </View>
+
+                  {isBusy && (
+                    <View style={styles.modelBusyRow}>
+                      <ActivityIndicator size="small" color={colors.accent} />
+                      <Text style={styles.modelBusyText}>
+                        {isInitializing
+                          ? (lang === 'ru' ? 'Загрузка в память...' : 'Loading into RAM...')
+                          : (progressText || (lang === 'ru' ? 'Скачивание...' : 'Downloading...'))}
+                      </Text>
+                    </View>
+                  )}
+
+                  <View style={styles.modelActionsRow}>
+                    <TouchableOpacity
+                      style={[styles.modelActionButton, isActive && styles.modelActionButtonActive]}
+                      onPress={() => handleSelectModel(id)}
+                      disabled={isActive || isBusy || isLoading || Boolean(modelBusyId)}
+                    >
+                      <Text style={[styles.modelActionText, isActive && styles.modelActionTextActive]}>
+                        {lang === 'ru' ? 'Выбрать' : 'Select'}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.modelActionButton}
+                      onPress={() => handleDownloadModel(id)}
+                      disabled={status.exists || isBusy || Boolean(modelBusyId)}
+                    >
+                      <Text style={styles.modelActionText}>{lang === 'ru' ? 'Скачать' : 'Download'}</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.modelActionButton}
+                      onPress={() => handleLoadModel(id)}
+                      disabled={!status.exists || status.loaded || isBusy || Boolean(modelBusyId)}
+                    >
+                      <Text style={styles.modelActionText}>{lang === 'ru' ? 'Загрузить' : 'Load'}</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.modelActionButton, styles.modelDeleteButton]}
+                      onPress={() => confirmDeleteModel(id)}
+                      disabled={!status.exists || isBusy || Boolean(modelBusyId)}
+                    >
+                      <Text style={[styles.modelActionText, styles.modelDeleteText]}>
+                        {lang === 'ru' ? 'Удалить' : 'Delete'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
+  );
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={headerHeight}
     >
-      {!isModelReady && (
+      {(isModelDownloading || isInitializing) && (
         <View style={styles.downloadContainer}>
           <ActivityIndicator size="large" color="#4CAF50" />
           <Text style={styles.downloadText}>
-            {isInitializing 
-              ? t('modelInitializing', lang)
-              : t('modelDownloading', lang, { progress: downloadProgress.toFixed(1) })
+            {isInitializing
+              ? t('modelInitializing', lang, { size: MODEL_CATALOG[activeModel].sizeLabel })
+              : t('modelDownloading', lang, {
+                  downloaded: `${(downloadedBytes / 1e9).toFixed(2)} ${lang === 'ru' ? 'ГБ' : 'GB'}`,
+                  size: MODEL_CATALOG[activeModel].sizeLabel,
+                })
             }
           </Text>
         </View>
       )}
+      {renderModelSettingsModal()}
       <FlatList
         ref={flatListRef}
         data={messages}
         keyExtractor={item => item.id}
         renderItem={renderMessage}
-        contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: 120 }}
+        contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: 88 }}
         onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
         onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
       />
+      <View style={[styles.modelRail, { display: 'none' }]}>
+        <Text style={styles.modelRailLabel}>{lang === 'ru' ? 'Модель:' : 'Model:'}</Text>
+        {MODEL_IDS.map((id) => {
+          const spec = MODEL_CATALOG[id];
+          const isActive = id === activeModel;
+          return (
+            <TouchableOpacity
+              key={id}
+              style={[styles.chip, isActive && styles.chipActive]}
+              onPress={() => handleSelectModel(id)}
+              disabled={isLoading || isInitializing}
+            >
+              <Text style={[styles.chipText, isActive && styles.chipTextActive]} numberOfLines={1}>
+                {spec.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <View style={styles.promptRail}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.promptRailContent}
+        >
+          {demoPrompts.map((prompt) => (
+            <TouchableOpacity
+              key={prompt}
+              style={styles.promptChip}
+              onPress={() => applyDemoPrompt(prompt)}
+              disabled={isLoading || isRecording || isWhisperDownloading || isWhisperInitializing}
+            >
+              <Ionicons name="sparkles" size={12} color={colors.accent} />
+              <Text style={styles.promptChipText} numberOfLines={1}>{prompt}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
       {(isWhisperDownloading || isWhisperInitializing) && (
         <View style={styles.downloadContainer}>
           <ActivityIndicator size="small" color="#4CAF50" />
@@ -1775,6 +2126,15 @@ export default function ChatScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
+  headerIconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceAlt,
+    marginRight: spacing(2),
+  },
   messageRow: { width: '100%', flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   avatar: {
     width: 30,
@@ -1820,6 +2180,118 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   statsPillText: { color: colors.textSecondary, fontSize: 10, fontWeight: '600' },
+  settingsOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    alignItems: 'flex-end',
+    paddingTop: spacing(12),
+    paddingHorizontal: spacing(3),
+  },
+  settingsPanel: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing(4),
+    ...shadow.floating,
+  },
+  settingsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing(3),
+    marginBottom: spacing(3),
+  },
+  settingsTitle: { color: colors.textPrimary, fontSize: fontSize.lg, fontWeight: '800' },
+  settingsSubtitle: { color: colors.textSecondary, fontSize: fontSize.xs, marginTop: 2 },
+  settingsCloseButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceAlt,
+  },
+  modelSettingsList: { gap: spacing(3) },
+  modelSettingsRow: {
+    backgroundColor: colors.surfaceInput,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    padding: spacing(3),
+    gap: spacing(2),
+  },
+  modelSettingsRowActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
+  modelSettingsTop: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing(2) },
+  modelSettingsName: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: '800' },
+  modelSettingsHint: { color: colors.textSecondary, fontSize: fontSize.xs, marginTop: 2 },
+  modelStatusPills: {
+    maxWidth: 130,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  modelBusyRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  modelBusyText: { color: colors.accent, fontSize: fontSize.xs, fontWeight: '700' },
+  modelActionsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  modelActionButton: {
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceAlt,
+    paddingHorizontal: spacing(2.5),
+    paddingVertical: 7,
+  },
+  modelActionButtonActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
+  modelActionText: { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '800' },
+  modelActionTextActive: { color: colors.accent },
+  modelDeleteButton: { borderColor: colors.danger, backgroundColor: colors.dangerSoft },
+  modelDeleteText: { color: colors.danger },
+  modelRail: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: spacing(3),
+    paddingTop: spacing(2),
+    backgroundColor: colors.surface,
+  },
+  modelRailLabel: {
+    color: colors.textSecondary,
+    fontSize: fontSize.xs,
+    marginRight: 2,
+  },
+  promptRail: {
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingTop: spacing(2),
+  },
+  promptRailContent: {
+    gap: spacing(2),
+    paddingHorizontal: spacing(3),
+    paddingBottom: spacing(2),
+  },
+  promptChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    maxWidth: 230,
+    backgroundColor: colors.surfaceInput,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing(3),
+    paddingVertical: 7,
+  },
+  promptChipText: {
+    color: colors.textSecondary,
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+  },
   inputContainer: {
     flexDirection: 'row',
     paddingHorizontal: spacing(3),
@@ -1829,6 +2301,36 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     gap: spacing(2),
     alignItems: 'center',
+  },
+  contextBar: {
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingHorizontal: spacing(3),
+    paddingTop: spacing(2),
+  },
+  contextPill: {
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.accentSoft,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.accent,
+    paddingVertical: 5,
+    paddingLeft: 10,
+    paddingRight: 5,
+  },
+  contextText: { color: colors.accent, fontSize: fontSize.xs, fontWeight: '700', maxWidth: 240 },
+  contextClearButton: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
   },
   input: {
     flex: 1,

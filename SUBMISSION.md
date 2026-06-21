@@ -60,20 +60,26 @@ Follow [README.md](README.md) for build and run instructions. The app requires a
 
 ### Final Demo Hardware
 
-The exact device must be updated after the final recording and must match the video and screenshots submitted on DoraHacks.
+The exact device below matches the current demo phone screenshot from iOS Settings -> General -> About. The serial number should be redacted before any public submission.
 
 | Spec | Value |
 |------|-------|
-| Device | Pending final demo recording |
-| CPU / GPU | Pending final demo recording |
-| RAM | Pending final demo recording |
-| Storage | Pending final demo recording |
-| OS | Pending final demo recording |
+| Device | iPhone 17 Pro, model number MG874J/A, retail device |
+| CPU / GPU | Apple A19 Pro; 6-core CPU (2 performance + 4 efficiency cores); 6-core GPU with Neural Accelerators; 16-core Neural Engine |
+| RAM | 12 GB RAM, based on external device-spec sources; iOS Settings does not expose RAM |
+| Storage | 256 GB capacity; 36.76 GB available in the submitted Settings screenshot |
+| OS | iOS 26.5.1 |
 | Inference backend | QVAC local inference; GPU intended where available |
+
+Hardware sources:
+
+- Device model, model number, OS version, storage capacity, and available storage: iOS Settings -> General -> About screenshot.
+- CPU, GPU, and Neural Engine: Apple iPhone 17 Pro technical specifications.
+- RAM: external device-spec source, because Apple/iOS Settings does not publish RAM in the About screen.
 
 Required screenshot evidence for final submission:
 
-- iOS: Settings -> General -> About, plus device model/storage view where available.
+- iOS: Settings -> General -> About, plus device model/storage view where available. Redact serial number before public posting.
 - Android: Settings -> About phone, RAM/storage/device model where available.
 - Emulator/simulator if used for General Purpose: host CPU/GPU/RAM/storage screenshot.
 
@@ -93,4 +99,3 @@ This repository includes planning and implementation work created before the fin
 6. Use voice input and show local QVAC Whisper transcription.
 7. Show disclosed remote services in [remote_apis.json](remote_apis.json).
 8. Export the structured audit log and compare the run with [inference_audit_log.json](inference_audit_log.json).
-

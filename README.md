@@ -150,16 +150,16 @@ The app is runnable out of the box on the declared hardware by following the **L
 
 | Spec | Value |
 |------|-------|
-| Device | Pending final demo recording |
-| Chip / CPU+GPU | Pending final demo recording |
-| RAM | Pending final demo recording |
-| Storage | Pending final demo recording |
-| OS | Pending final demo recording |
+| Device | iPhone 17 Pro, model number MG874J/A, retail device |
+| Chip / CPU+GPU | Apple A19 Pro; 6-core CPU (2 performance + 4 efficiency cores); 6-core GPU with Neural Accelerators; 16-core Neural Engine |
+| RAM | 12 GB RAM, based on external device-spec sources; iOS Settings does not expose RAM |
+| Storage | 256 GB capacity; 36.76 GB available in the submitted Settings screenshot |
+| OS | iOS 26.5.1 |
 | Inference backend | QVAC local inference; GPU intended where available, `gpu_layers: 99`, `ctx_size: 8192` |
 
-Final submission hardware evidence must match the recorded demo device. Add screenshots from iOS Settings -> General -> About, Android Settings -> About phone, or the host system profiler if the General Purpose track is evaluated through an emulator/simulator.
+Final submission hardware evidence must match the recorded demo device. Add screenshots from iOS Settings -> General -> About, Android Settings -> About phone, or the host system profiler if the General Purpose track is evaluated through an emulator/simulator. Redact the iPhone serial number before public posting.
 
-Observed performance on-device (from the committed audit log): generation ~22–30 tokens/sec, TTFT ~1–5 s on a warm model; KV-cache reuse reduces TTFT on follow-up turns in the same conversation.
+Observed performance on-device (from the committed audit log): generation ~22-30 tokens/sec, TTFT ~1-5 s on a warm model; KV-cache reuse reduces TTFT on follow-up turns in the same conversation.
 
 The standard demo keeps the QVAC model resident after loading, so the committed sample audit log does not include a `model_unload` event. If the final demo adds explicit unload/reload behavior, export a fresh log that includes it.
 

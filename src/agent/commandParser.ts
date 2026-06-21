@@ -1,3 +1,5 @@
+import { AiContext, isAccountContext } from './aiContext';
+
 type AccountLike = {
   id: string;
   name: string;
@@ -23,6 +25,12 @@ export type ParsedCommand =
       confidence: number;
     }
   | {
+      action: 'rename_account';
+      accountId: string;
+      newName: string;
+      confidence: number;
+    }
+  | {
       action: 'update_goal';
       targetValue: number;
       title: string;
@@ -31,6 +39,8 @@ export type ParsedCommand =
     };
 
 const RU_CHARS = '\u0430-\u044f\u0451';
+const ENABLE_CHAT_ACCOUNT_CREATION = false;
+const ENABLE_CHAT_ACCOUNT_RENAME = false;
 
 const OP_KEYWORDS = {
   add: [
@@ -125,6 +135,18 @@ const CREATE_ACCOUNT_VERBS = [
   '\u043e\u0442\u043a\u0440\u044b\u0442\u044c',
   '\u043d\u043e\u0432\u044b\u0439',
   '\u043d\u043e\u0432\u0443\u044e',
+];
+
+const RENAME_ACCOUNT_KEYWORDS = [
+  'rename',
+  'rename account',
+  'change name',
+  'change account name',
+  'call it',
+  'name it',
+  '\u043f\u0435\u0440\u0435\u0438\u043c\u0435\u043d',
+  '\u043d\u0430\u0437\u043e\u0432',
+  '\u0438\u0437\u043c\u0435\u043d\u0438 \u043d\u0430\u0437\u0432\u0430\u043d',
 ];
 
 const ACCOUNT_NOUNS = [
@@ -235,11 +257,50 @@ function compact(value: string): string {
 }
 
 function hasAny(text: string, keywords: string[]): boolean {
-  return keywords.some((keyword) => text.includes(keyword));
+  return keywords.some((keyword) => {
+    const normalizedKeyword = normalizeText(keyword);
+    if (!normalizedKeyword) return false;
+
+    const isAsciiKeyword = /^[a-z0-9\s-]+$/i.test(normalizedKeyword);
+    if (isAsciiKeyword) {
+      return new RegExp(`(^|\\s)${escapeRegExp(normalizedKeyword)}(?=\\s|$)`, 'i').test(text);
+    }
+
+    return text.includes(normalizedKeyword);
+  });
 }
 
 function isCreateAccountCommand(text: string): boolean {
   return hasAny(text, CREATE_ACCOUNT_KEYWORDS) || (hasAny(text, CREATE_ACCOUNT_VERBS) && hasAny(text, ACCOUNT_NOUNS));
+}
+
+function isRenameAccountCommand(text: string): boolean {
+  return hasAny(text, RENAME_ACCOUNT_KEYWORDS);
+}
+
+function cleanRenameCandidate(value: string): string | null {
+  const candidate = value
+    .replace(/^[\s"'`]+|[\s"'`.!?]+$/g, '')
+    .replace(/\b(account|wallet|card|bank)\b$/i, '')
+    .trim();
+  return candidate.length >= 2 ? candidate : null;
+}
+
+function extractRenameAccountName(rawText: string): string | null {
+  const patterns = [
+    /(?:rename(?:\s+(?:this|it|account|wallet))?(?:\s+to)?|call\s+it|name\s+it|change(?:\s+the)?(?:\s+account)?\s+name(?:\s+to)?)\s+(.+)$/i,
+    new RegExp('(?:\\u043f\\u0435\\u0440\\u0435\\u0438\\u043c\\u0435\\u043d\\w*(?:\\s+\\S+){0,3}?\\s+(?:\\u0432|\\u043d\\u0430)|\\u043d\\u0430\\u0437\\u043e\\u0432\\w*(?:\\s+\\S+){0,2}?|\\u0438\\u0437\\u043c\\u0435\\u043d\\u0438\\w*\\s+\\u043d\\u0430\\u0437\\u0432\\u0430\\u043d\\w*\\s+(?:\\u0432|\\u043d\\u0430))\\s+(.+)$', 'i'),
+  ];
+
+  for (const pattern of patterns) {
+    const match = rawText.match(pattern);
+    if (match) {
+      const candidate = cleanRenameCandidate(match[1]);
+      if (candidate) return candidate;
+    }
+  }
+
+  return null;
 }
 
 function extractCreateAccountName(rawText: string): string | null {
@@ -384,12 +445,22 @@ export function extractBalanceAccountNameHint(rawText: string): string | null {
     'bank',
     'card',
     'wallet',
+    'here',
+    'there',
+    'this',
+    'current',
     '\u0443',
     '\u043c\u0435\u043d\u044f',
     '\u043d\u0430',
     '\u0432',
     '\u0441',
     '\u0441\u043e',
+    '\u0442\u0443\u0442',
+    '\u0441\u044e\u0434\u0430',
+    '\u0437\u0434\u0435\u0441\u044c',
+    '\u044d\u0442\u043e\u0442',
+    '\u044d\u0442\u043e\u043c',
+    '\u044d\u0442\u043e\u043c\u0443',
     '\u0442\u0430\u043c',
     '\u0441\u0435\u0439\u0447\u0430\u0441',
     '\u043b\u0435\u0436\u0438\u0442',
@@ -531,7 +602,6 @@ export function isPotentialCommand(rawText: string): boolean {
   const text = normalizeText(rawText);
   return (
     /\bbtc\b|\bbitcoin\b/.test(text) ||
-    isCreateAccountCommand(text) ||
     detectOperation(text) !== null ||
     (parseAmount(text) !== null && isGoalCommand(text))
   );
@@ -540,7 +610,8 @@ export function isPotentialCommand(rawText: string): boolean {
 export function parseFinanceCommand(
   rawText: string,
   accounts: AccountLike[],
-  chatHistory?: { role: 'user' | 'assistant'; content: string }[]
+  chatHistory?: { role: 'user' | 'assistant'; content: string }[],
+  aiContext?: AiContext | null
 ): ParsedCommand | null {
   const text = normalizeText(rawText);
   if (!text) return null;
@@ -552,8 +623,33 @@ export function parseFinanceCommand(
     return { action: 'btc_price', confidence: 0.95 };
   }
 
+  if (ENABLE_CHAT_ACCOUNT_RENAME && isRenameAccountCommand(text)) {
+    const newName = extractRenameAccountName(rawText);
+    const accountMatch = findAccount(text, accounts);
+    const contextAccount = isAccountContext(aiContext)
+      ? accounts.find((item) => item.id === aiContext.accountId) || null
+      : null;
+    const account =
+      accountMatch.confidence >= 0.78
+        ? accountMatch.account
+        : contextAccount;
+
+    if (newName && account) {
+      return {
+        action: 'rename_account',
+        accountId: account.id,
+        newName,
+        confidence: accountMatch.confidence >= 0.78 ? 0.88 : 0.82,
+      };
+    }
+  }
+
   const amount = parseAmount(text);
   if (amount === null) return null;
+
+  if (isCreateAccountCommand(text) && !ENABLE_CHAT_ACCOUNT_CREATION) {
+    return null;
+  }
 
   if (isGoalCommand(text)) {
     return {
@@ -565,7 +661,7 @@ export function parseFinanceCommand(
     };
   }
 
-  if (isCreateAccountCommand(text)) {
+  if (ENABLE_CHAT_ACCOUNT_CREATION && isCreateAccountCommand(text)) {
     const name = extractCreateAccountName(rawText) ?? extractBalanceAccountNameHint(rawText);
     if (!name) return null;
     return {
@@ -592,6 +688,14 @@ export function parseFinanceCommand(
   const currency = detectCurrency(rawText, account);
   if (!account && hasUnknownAccountHint) {
     return null;
+  }
+
+  if (!account && isAccountContext(aiContext)) {
+    const contextAccount = accounts.find((item) => item.id === aiContext.accountId);
+    if (contextAccount) {
+      account = contextAccount;
+      accountConfidence = 0.86;
+    }
   }
 
   if (!account) {
@@ -635,6 +739,13 @@ export function commandToToolCall(command: ParsedCommand): string {
       accountName: command.name,
       amount: command.amount,
       currency: command.currency,
+    })}]`;
+  }
+
+  if (command.action === 'rename_account') {
+    return `[TOOL_CALL: RENAME_ACCOUNT: ${JSON.stringify({
+      accountId: command.accountId,
+      newName: command.newName,
     })}]`;
   }
 

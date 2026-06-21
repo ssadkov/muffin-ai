@@ -25,23 +25,25 @@ import EmptyState from '../components/EmptyState';
 import {
   getLatestBalances,
   updateAccountAddress, 
-  createWalletAccount, 
+  createManualAccount,
   getAccountHistory,
   addExchangeConnection,
   syncExchangeBalance,
   deleteExchangeConnection,
+  deleteAccount,
   syncAllExchanges,
   getSetting,
   updateAccountMetadata,
   updateAccountName,
   executeBalanceUpdate,
-  OwnerType
+  OwnerType,
+  AccountType
 } from '../tools/databaseTools';
 import { testBybitConnection } from '../services/bybitService';
 import { testBinanceConnection } from '../services/binanceService';
 import { testOkxConnection } from '../services/okxService';
 import { syncPublicWallets } from '../services/walletSyncService';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { t, Language } from '../localization/localization';
 
 type ExchangeProvider = 'Bybit' | 'Binance' | 'OKX';
@@ -52,20 +54,125 @@ type ExchangeBreakdownToken = {
   usdValue: number;
 };
 
-const NETWORK_META: Record<string, { label: string; color: string; soft: string; abbr: string }> = {
-  'solana_public_wallet':   { label: 'Solana',   color: '#9945FF', soft: 'rgba(153,69,255,0.14)', abbr: 'SOL' },
-  'aptos_public_wallet':    { label: 'Aptos',    color: '#00C8FF', soft: 'rgba(0,200,255,0.14)',   abbr: 'APT' },
-  'ethereum_public_wallet': { label: 'Ethereum', color: '#627EEA', soft: 'rgba(98,126,234,0.14)',  abbr: 'ETH' },
+type ProviderMarkKind = 'solana' | 'aptos' | 'ethereum' | 'bybit' | 'binance' | 'okx' | 'wallet' | 'exchange' | 'bank';
+type ProviderMeta = { label: string; color: string; soft: string; abbr: string; mark: ProviderMarkKind };
+type AccountVisual = { icon?: keyof typeof Ionicons.glyphMap; mark?: ProviderMarkKind; color: string; soft: string };
+
+const NETWORK_META: Record<string, ProviderMeta> = {
+  'solana_public_wallet':   { label: 'Solana',   color: '#14F195', soft: 'rgba(20,241,149,0.14)', abbr: 'SOL', mark: 'solana' },
+  'aptos_public_wallet':    { label: 'Aptos',    color: '#00D0FF', soft: 'rgba(0,208,255,0.14)',  abbr: 'APT', mark: 'aptos' },
+  'ethereum_public_wallet': { label: 'Ethereum', color: '#627EEA', soft: 'rgba(98,126,234,0.14)', abbr: 'ETH', mark: 'ethereum' },
 };
 
 const EXCHANGE_OPTIONS: ExchangeProvider[] = ['Bybit', 'Binance', 'OKX'];
 
-function getAccountVisual(item: any): { icon: keyof typeof Ionicons.glyphMap; color: string; soft: string } {
+const MANUAL_ACCOUNT_TYPES: Array<{ type: AccountType; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
+  { type: 'bank', label: 'Bank', icon: 'business-outline' },
+  { type: 'cash', label: 'Cash', icon: 'cash-outline' },
+  { type: 'card', label: 'Card', icon: 'card-outline' },
+  { type: 'crypto_wallet', label: 'Wallet', icon: 'wallet-outline' },
+  { type: 'other', label: 'Other', icon: 'apps-outline' },
+];
+
+const EXCHANGE_META: Record<ExchangeProvider, ProviderMeta> = {
+  Bybit: { label: 'Bybit', color: '#F7A600', soft: 'rgba(247,166,0,0.15)', abbr: 'BB', mark: 'bybit' },
+  Binance: { label: 'Binance', color: '#F3BA2F', soft: 'rgba(243,186,47,0.16)', abbr: 'BN', mark: 'binance' },
+  OKX: { label: 'OKX', color: '#FFFFFF', soft: 'rgba(255,255,255,0.12)', abbr: 'OK', mark: 'okx' },
+};
+
+function getExchangeProvider(source?: string | null, name?: string | null): ExchangeProvider | null {
+  const value = `${source || ''} ${name || ''}`.toLowerCase();
+  if (value.includes('bybit')) return 'Bybit';
+  if (value.includes('binance')) return 'Binance';
+  if (value.includes('okx')) return 'OKX';
+  return null;
+}
+
+function getAccountVisual(item: any): AccountVisual {
+  const source = String(item.source || '').toLowerCase();
+  const exchange = getExchangeProvider(source, item.name);
+  if (exchange) {
+    const meta = EXCHANGE_META[exchange];
+    return { mark: meta.mark, color: meta.color, soft: meta.soft };
+  }
+  if (NETWORK_META[source]) {
+    const meta = NETWORK_META[source];
+    return { mark: meta.mark, color: meta.color, soft: meta.soft };
+  }
+
   const isCryptoWallet = item.source?.endsWith('_wallet') || item.type === 'crypto_wallet';
   const isExchange = item.source?.endsWith('_api') || item.type === 'exchange';
-  if (isExchange) return { icon: 'trending-up', color: colors.info, soft: colors.infoSoft };
-  if (isCryptoWallet) return { icon: 'wallet', color: colors.accent, soft: colors.accentSoft };
-  return { icon: 'card', color: colors.textSecondary, soft: colors.surfaceAlt };
+  if (isExchange) return { mark: 'exchange', color: colors.info, soft: colors.infoSoft };
+  if (isCryptoWallet) return { mark: 'wallet', color: colors.accent, soft: colors.accentSoft };
+  return { mark: 'bank', color: colors.textSecondary, soft: colors.surfaceAlt };
+}
+
+function ProviderMark({ kind, color }: { kind?: ProviderMarkKind; color: string }) {
+  if (kind === 'solana') {
+    return (
+      <View style={styles.solanaMark}>
+        <View style={[styles.solanaBar, { backgroundColor: '#00FFA3' }]} />
+        <View style={[styles.solanaBar, { backgroundColor: '#DC1FFF' }]} />
+        <View style={[styles.solanaBar, { backgroundColor: '#00D1FF' }]} />
+      </View>
+    );
+  }
+
+  if (kind === 'binance') {
+    return (
+      <View style={styles.binanceMark}>
+        <View style={[styles.binanceDiamond, styles.binanceDiamondTop, { backgroundColor: color }]} />
+        <View style={[styles.binanceDiamond, styles.binanceDiamondLeft, { backgroundColor: color }]} />
+        <View style={[styles.binanceDiamond, styles.binanceDiamondCenter, { backgroundColor: color }]} />
+        <View style={[styles.binanceDiamond, styles.binanceDiamondRight, { backgroundColor: color }]} />
+        <View style={[styles.binanceDiamond, styles.binanceDiamondBottom, { backgroundColor: color }]} />
+      </View>
+    );
+  }
+
+  if (kind === 'okx') {
+    return (
+      <View style={styles.okxMark}>
+        {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((cell) => (
+          <View
+            key={cell}
+            style={[
+              styles.okxCell,
+              cell === 1 || cell === 3 || cell === 5 || cell === 7 ? styles.okxCellDim : null,
+            ]}
+          />
+        ))}
+      </View>
+    );
+  }
+
+  if (kind === 'ethereum') {
+    return (
+      <View style={styles.ethereumMark}>
+        <View style={[styles.ethereumDiamond, { borderBottomColor: color }]} />
+        <View style={[styles.ethereumDiamondLower, { borderTopColor: color }]} />
+      </View>
+    );
+  }
+
+  if (kind === 'aptos') {
+    return (
+      <View style={styles.aptosMark}>
+        <View style={[styles.aptosLine, { backgroundColor: color, width: 18 }]} />
+        <View style={[styles.aptosLine, { backgroundColor: color, width: 13 }]} />
+        <View style={[styles.aptosLine, { backgroundColor: color, width: 16 }]} />
+        <View style={[styles.aptosLine, { backgroundColor: color, width: 10 }]} />
+      </View>
+    );
+  }
+
+  if (kind === 'bybit') {
+    return <Text style={[styles.bybitMark, { color }]}>B</Text>;
+  }
+
+  const fallbackIcon: keyof typeof Ionicons.glyphMap =
+    kind === 'exchange' ? 'trending-up' : kind === 'bank' ? 'card' : 'wallet';
+  return <Ionicons name={fallbackIcon} size={20} color={color} />;
 }
 
 function getExchangeApiLabel(source: string, lang: Language): string {
@@ -111,6 +218,7 @@ function formatTokenAmount(value: number): string {
 
 export default function AccountsScreen() {
   const isFocused = useIsFocused();
+  const navigation = useNavigation<any>();
   const [lang, setLang] = useState<Language>('ru');
   const [accounts, setAccounts] = useState<any[]>([]);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
@@ -133,6 +241,12 @@ export default function AccountsScreen() {
   // Add Wallet state
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [newWalletName, setNewWalletName] = useState('');
+  const [newAccountType, setNewAccountType] = useState<AccountType>('bank');
+  const [newAccountOwnerType, setNewAccountOwnerType] = useState<OwnerType>('personal');
+  const [newAccountOwnership, setNewAccountOwnership] = useState('100');
+  const [newAccountBalance, setNewAccountBalance] = useState('0');
+  const [newAccountCurrency, setNewAccountCurrency] = useState('USD');
+  const [newAccountNote, setNewAccountNote] = useState('');
   const [newWalletNetwork, setNewWalletNetwork] = useState('solana_public_wallet');
   const [newWalletAddress, setNewWalletAddress] = useState('');
 
@@ -170,6 +284,22 @@ export default function AccountsScreen() {
     const history = getAccountHistory(account.id);
     setHistoryData(history);
     setIsHistoryVisible(true);
+  };
+
+  const openAccountChat = (account: any) => {
+    navigation.navigate('Chat');
+  };
+
+  const resetEditModal = () => {
+    setIsEditModalVisible(false);
+    setSelectedAccount(null);
+    setAccountNameInput('');
+    setAddressInput('');
+    setOwnerTypeInput('personal');
+    setOwnershipInput('100');
+    setBalanceAmountInput('');
+    setCurrencyInput('USD');
+    setModelNoteInput('');
   };
 
   const saveAccountConfig = () => {
@@ -221,14 +351,7 @@ export default function AccountsScreen() {
       // Refresh state
       setAccounts(getLatestBalances());
       
-      setIsEditModalVisible(false);
-      setSelectedAccount(null);
-      setAccountNameInput('');
-      setAddressInput('');
-      setOwnershipInput('100');
-      setBalanceAmountInput('');
-      setCurrencyInput('USD');
-      setModelNoteInput('');
+      resetEditModal();
     } catch (e) {
       console.error(e);
       Alert.alert(t('error', lang), t('saveAddressError', lang));
@@ -238,20 +361,45 @@ export default function AccountsScreen() {
   const handleCreateWallet = () => {
     const trimmedName = newWalletName.trim();
     const trimmedAddress = newWalletAddress.trim();
+    const normalizedBalanceInput = newAccountBalance.replace(',', '.').trim();
+    const parsedBalance = Number(normalizedBalanceInput);
+    const parsedOwnership = Number(newAccountOwnership.replace(',', '.').trim());
+    const normalizedCurrency = newAccountCurrency.trim().toUpperCase() || 'USD';
 
     if (!trimmedName) {
       Alert.alert(t('validationGoalTitle', lang), lang === 'ru' ? 'Пожалуйста, введите имя кошелька.' : 'Please enter a wallet name.');
       return;
     }
 
+    if (!normalizedBalanceInput || !Number.isFinite(parsedBalance) || parsedBalance < 0) {
+      Alert.alert(t('validationGoalTitle', lang), lang === 'ru' ? 'Введите корректный баланс.' : 'Please enter a valid balance.');
+      return;
+    }
+
     try {
-      createWalletAccount(trimmedName, newWalletNetwork, trimmedAddress);
+      createManualAccount({
+        name: trimmedName,
+        type: newAccountType,
+        ownerType: newAccountOwnerType,
+        ownershipPercent: Number.isFinite(parsedOwnership) ? parsedOwnership : 100,
+        amount: parsedBalance,
+        currency: normalizedCurrency,
+        modelNote: newAccountNote,
+        address: trimmedAddress,
+        source: newAccountType === 'crypto_wallet' ? newWalletNetwork : 'manual',
+      });
       
       // Refresh state
       setAccounts(getLatestBalances());
       
       // Reset form
       setNewWalletName('');
+      setNewAccountType('bank');
+      setNewAccountOwnerType('personal');
+      setNewAccountOwnership('100');
+      setNewAccountBalance('0');
+      setNewAccountCurrency('USD');
+      setNewAccountNote('');
       setNewWalletNetwork('solana_public_wallet');
       setNewWalletAddress('');
       setIsAddModalVisible(false);
@@ -356,6 +504,44 @@ export default function AccountsScreen() {
     );
   };
 
+  const confirmDeleteSelectedAccount = () => {
+    if (!selectedAccount) return;
+
+    const accountId = selectedAccount.id;
+    const accountName = selectedAccount.name || (lang === 'ru' ? 'счет' : 'account');
+
+    Alert.alert(
+      lang === 'ru' ? 'Удалить счет?' : 'Delete account?',
+      lang === 'ru'
+        ? `Удалить "${accountName}" и всю локальную историю балансов? Для API-подключений также удалятся локальные ключи. Это действие нельзя отменить.`
+        : `Delete "${accountName}" and all local balance history? API connections will also remove local credentials. This cannot be undone.`,
+      [
+        { text: t('cancel', lang), style: 'cancel' },
+        {
+          text: lang === 'ru' ? 'Удалить' : 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteAccount(accountId);
+              setAccounts(getLatestBalances());
+              resetEditModal();
+              Alert.alert(
+                t('deletedTitle', lang),
+                lang === 'ru' ? 'Счет удален.' : 'Account deleted.'
+              );
+            } catch (e: any) {
+              console.error(e);
+              Alert.alert(
+                t('error', lang),
+                lang === 'ru' ? 'Не удалось удалить счет.' : 'Failed to delete account.'
+              );
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const handleSyncAll = async () => {
     setIsSyncingAll(true);
     try {
@@ -391,7 +577,11 @@ export default function AccountsScreen() {
       >
         <View style={styles.cardHeader}>
           <View style={[styles.accountIcon, { backgroundColor: visual.soft }]}>
-            <Ionicons name={visual.icon} size={20} color={visual.color} />
+            {visual.mark ? (
+              <ProviderMark kind={visual.mark} color={visual.color} />
+            ) : (
+              <Ionicons name={visual.icon || 'wallet'} size={20} color={visual.color} />
+            )}
           </View>
           <View style={{ flex: 1, paddingHorizontal: spacing(2) }}>
             <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
@@ -486,6 +676,10 @@ export default function AccountsScreen() {
             <Ionicons name="time-outline" size={12} color={colors.textMuted} />
             <Text style={styles.date}>{item.created_at ? new Date(item.created_at).toLocaleDateString() : 'N/A'}</Text>
           </View>
+          <TouchableOpacity style={styles.inlineAskButton} onPress={() => openAccountChat(item)}>
+            <Ionicons name="sparkles" size={13} color={colors.accent} />
+            <Text style={styles.inlineEditText}>Ask</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.inlineEditButton} onPress={() => openEditModal(item)}>
             <Ionicons name="settings-outline" size={13} color={colors.accent} />
             <Text style={styles.inlineEditText}>{lang === 'ru' ? 'Настроить' : 'Configure'}</Text>
@@ -587,7 +781,7 @@ export default function AccountsScreen() {
       <View style={styles.actionRow}>
         <TouchableOpacity style={styles.actionButton} onPress={() => setIsAddModalVisible(true)}>
           <Ionicons name="wallet-outline" size={18} color={colors.accent} />
-          <Text style={styles.actionButtonText}>{lang === 'ru' ? 'Добавить кошелёк' : 'Add wallet'}</Text>
+          <Text style={styles.actionButtonText}>{lang === 'ru' ? 'Добавить счет' : 'Add account'}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.actionButton, { borderColor: colors.info }]}
@@ -627,7 +821,7 @@ export default function AccountsScreen() {
         visible={isEditModalVisible}
         transparent={true}
         animationType="slide"
-        onRequestClose={() => setIsEditModalVisible(false)}
+        onRequestClose={resetEditModal}
       >
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View style={styles.modalOverlay}>
@@ -720,7 +914,7 @@ export default function AccountsScreen() {
                 <View style={styles.modalButtons}>
                   <TouchableOpacity 
                     style={[styles.modalButton, styles.cancelButton]} 
-                    onPress={() => setIsEditModalVisible(false)}
+                    onPress={resetEditModal}
                   >
                     <Text style={styles.buttonText}>{t('cancel', lang)}</Text>
                   </TouchableOpacity>
@@ -731,13 +925,23 @@ export default function AccountsScreen() {
                     <Text style={styles.buttonText}>{t('save', lang)}</Text>
                   </TouchableOpacity>
                 </View>
+
+                <TouchableOpacity
+                  style={styles.deleteAccountButton}
+                  onPress={confirmDeleteSelectedAccount}
+                >
+                  <Ionicons name="trash" size={15} color={colors.danger} />
+                  <Text style={styles.deleteAccountText}>
+                    {lang === 'ru' ? 'Удалить счет' : 'Delete account'}
+                  </Text>
+                </TouchableOpacity>
               </ScrollView>
             </KeyboardAvoidingView>
           </View>
         </TouchableWithoutFeedback>
       </Modal>
 
-      {/* Add New Wallet Modal */}
+      {/* Add Account Modal */}
       <Modal
         visible={isAddModalVisible}
         transparent={true}
@@ -750,46 +954,125 @@ export default function AccountsScreen() {
               behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
               style={styles.modalContent}
             >
-              <Text style={styles.modalTitle}>{lang === 'ru' ? 'Добавить кошелек' : 'Add New Wallet'}</Text>
+              <ScrollView contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
+              <Text style={styles.modalTitle}>{lang === 'ru' ? 'Добавить счет' : 'Add account'}</Text>
               
               <FormInput
-                label={t('newWalletNameLabel', lang)}
-                placeholder={t('newWalletNamePlaceholder', lang)}
+                label={lang === 'ru' ? 'Название счета' : 'Account name'}
+                placeholder={lang === 'ru' ? 'Например: Halyk Bank' : 'Example: Halyk Bank'}
                 value={newWalletName}
                 onChangeText={setNewWalletName}
+                autoCapitalize="words"
               />
 
-              <Text style={styles.inputLabel}>{t('walletNetworkLabel', lang)}</Text>
-              <View style={styles.networkSelector}>
-                {Object.entries(NETWORK_META).map(([key, meta]) => {
-                  const isActive = newWalletNetwork === key;
+              <Text style={styles.inputLabel}>{lang === 'ru' ? 'Тип счета' : 'Account type'}</Text>
+              <View style={styles.segmentedWrap}>
+                {MANUAL_ACCOUNT_TYPES.map((item) => {
+                  const isActive = newAccountType === item.type;
                   return (
                     <TouchableOpacity
-                      key={key}
-                      style={[styles.networkOptionRow, isActive && { borderColor: meta.color, backgroundColor: meta.soft }]}
-                      onPress={() => setNewWalletNetwork(key)}
+                      key={item.type}
+                      style={[styles.segmentButton, styles.segmentButtonCompact, isActive && styles.segmentButtonActive]}
+                      onPress={() => setNewAccountType(item.type)}
                     >
-                      <View style={[styles.networkBadge, { backgroundColor: meta.color }]}>
-                        <Text style={styles.networkBadgeText}>{meta.abbr.charAt(0)}</Text>
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.networkOptionLabel, isActive && { color: meta.color }]}>{meta.label}</Text>
-                        <Text style={styles.networkOptionSub}>{meta.abbr}</Text>
-                      </View>
-                      {isActive && <Ionicons name="checkmark-circle" size={18} color={meta.color} />}
+                      <Ionicons name={item.icon} size={14} color={isActive ? colors.accent : colors.textSecondary} />
+                      <Text style={[styles.segmentButtonText, isActive && styles.segmentButtonTextActive]}>
+                        {item.label}
+                      </Text>
                     </TouchableOpacity>
                   );
                 })}
               </View>
 
+              <Text style={styles.inputLabel}>{lang === 'ru' ? 'Владелец' : 'Owner'}</Text>
+              <View style={styles.segmentedRow}>
+                {(['personal', 'company'] as OwnerType[]).map((owner) => (
+                  <TouchableOpacity
+                    key={owner}
+                    style={[styles.segmentButton, newAccountOwnerType === owner && styles.segmentButtonActive]}
+                    onPress={() => setNewAccountOwnerType(owner)}
+                  >
+                    <Text style={[styles.segmentButtonText, newAccountOwnerType === owner && styles.segmentButtonTextActive]}>
+                      {owner === 'personal' ? 'Personal' : 'Company'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
               <FormInput
-                label={t('walletAddressLabel', lang)}
-                placeholder={t('walletAddressPlaceholder', lang)}
+                label={lang === 'ru' ? 'Твоя доля, %' : 'Your share, %'}
+                placeholder="100"
+                value={newAccountOwnership}
+                onChangeText={setNewAccountOwnership}
+                keyboardType="numeric"
+              />
+
+              <FormInput
+                label={lang === 'ru' ? 'Начальный баланс' : 'Opening balance'}
+                placeholder="0"
+                value={newAccountBalance}
+                onChangeText={setNewAccountBalance}
+                keyboardType="decimal-pad"
+              />
+
+              <Text style={styles.inputLabel}>{lang === 'ru' ? 'Валюта' : 'Currency'}</Text>
+              <View style={styles.segmentedRow}>
+                {['USD', 'KZT', 'RUB', 'EUR'].map((currency) => (
+                  <TouchableOpacity
+                    key={currency}
+                    style={[styles.segmentButton, newAccountCurrency === currency && styles.segmentButtonActive]}
+                    onPress={() => setNewAccountCurrency(currency)}
+                  >
+                    <Text style={[styles.segmentButtonText, newAccountCurrency === currency && styles.segmentButtonTextActive]}>
+                      {currency}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {newAccountType === 'crypto_wallet' && (
+                <>
+                  <Text style={styles.inputLabel}>{t('walletNetworkLabel', lang)}</Text>
+                  <View style={styles.networkSelector}>
+                    {Object.entries(NETWORK_META).map(([key, meta]) => {
+                      const isActive = newWalletNetwork === key;
+                      return (
+                        <TouchableOpacity
+                          key={key}
+                          style={[styles.networkOptionRow, isActive && { borderColor: meta.color, backgroundColor: meta.soft }]}
+                          onPress={() => setNewWalletNetwork(key)}
+                        >
+                          <View style={[styles.networkBadge, { backgroundColor: meta.soft, borderColor: meta.color }]}>
+                            <ProviderMark kind={meta.mark} color={meta.color} />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.networkOptionLabel, isActive && { color: meta.color }]}>{meta.label}</Text>
+                            <Text style={styles.networkOptionSub}>{meta.abbr}</Text>
+                          </View>
+                          {isActive && <Ionicons name="checkmark-circle" size={18} color={meta.color} />}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
+
+              <FormInput
+                label={lang === 'ru' ? 'Адрес / реквизиты' : 'Address / details'}
+                placeholder={lang === 'ru' ? 'Опционально' : 'Optional'}
                 value={newWalletAddress}
                 onChangeText={setNewWalletAddress}
                 autoCapitalize="none"
                 autoCorrect={false}
                 mono
+              />
+
+              <FormInput
+                label={lang === 'ru' ? 'Комментарий для AI' : 'AI note'}
+                placeholder={lang === 'ru' ? 'Например: деньги компании, RUB' : 'Example: company money, RUB'}
+                value={newAccountNote}
+                onChangeText={setNewAccountNote}
+                multiline
               />
               
               <View style={styles.modalButtons}>
@@ -803,9 +1086,10 @@ export default function AccountsScreen() {
                   style={[styles.modalButton, styles.saveButton]} 
                   onPress={handleCreateWallet}
                 >
-                  <Text style={styles.buttonText}>{t('addWallet', lang)}</Text>
+                  <Text style={styles.buttonText}>{lang === 'ru' ? 'Добавить счет' : 'Add account'}</Text>
                 </TouchableOpacity>
               </View>
+              </ScrollView>
             </KeyboardAvoidingView>
           </View>
         </TouchableWithoutFeedback>
@@ -832,6 +1116,7 @@ export default function AccountsScreen() {
               <View style={styles.segmentedRow}>
                 {EXCHANGE_OPTIONS.map((exchange) => {
                   const isActive = selectedExchange === exchange;
+                  const meta = EXCHANGE_META[exchange];
                   return (
                     <TouchableOpacity
                       key={exchange}
@@ -839,9 +1124,14 @@ export default function AccountsScreen() {
                       onPress={() => setSelectedExchange(exchange)}
                       disabled={isTestingConnection}
                     >
-                      <Text style={[styles.segmentButtonText, isActive && styles.segmentButtonTextActive]}>
-                        {exchange}
-                      </Text>
+                      <View style={styles.exchangeOptionContent}>
+                        <View style={[styles.exchangeMiniMark, { backgroundColor: meta.soft, borderColor: isActive ? meta.color : colors.border }]}>
+                          <ProviderMark kind={meta.mark} color={meta.color} />
+                        </View>
+                        <Text style={[styles.segmentButtonText, isActive && styles.segmentButtonTextActive]}>
+                          {exchange}
+                        </Text>
+                      </View>
                     </TouchableOpacity>
                   );
                 })}
@@ -1036,7 +1326,49 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
+  solanaMark: { width: 22, height: 18, justifyContent: 'space-between', transform: [{ rotate: '-8deg' }] },
+  solanaBar: { width: 22, height: 4, borderRadius: 3 },
+  aptosMark: { width: 22, height: 18, justifyContent: 'space-between', alignItems: 'center' },
+  aptosLine: { height: 3, borderRadius: 3 },
+  bybitMark: { fontSize: 20, fontWeight: '900' },
+  ethereumMark: { width: 18, height: 22, alignItems: 'center', justifyContent: 'center' },
+  ethereumDiamond: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 7,
+    borderRightWidth: 7,
+    borderBottomWidth: 11,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+  },
+  ethereumDiamondLower: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 7,
+    borderRightWidth: 7,
+    borderTopWidth: 9,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    opacity: 0.7,
+  },
+  binanceMark: { width: 22, height: 22 },
+  binanceDiamond: {
+    position: 'absolute',
+    width: 6,
+    height: 6,
+    transform: [{ rotate: '45deg' }],
+    borderRadius: 1,
+  },
+  binanceDiamondTop: { left: 8, top: 1 },
+  binanceDiamondLeft: { left: 1, top: 8 },
+  binanceDiamondCenter: { left: 8, top: 8 },
+  binanceDiamondRight: { right: 1, top: 8 },
+  binanceDiamondBottom: { left: 8, bottom: 1 },
+  okxMark: { width: 22, height: 22, flexDirection: 'row', flexWrap: 'wrap', gap: 2 },
+  okxCell: { width: 6, height: 6, backgroundColor: '#FFF', borderRadius: 1 },
+  okxCellDim: { opacity: 0.35 },
   name: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: '700' },
   value: { color: colors.accent, fontSize: fontSize.lg, fontWeight: '800' },
   ownedValue: { color: colors.accent, fontSize: fontSize.xs, marginTop: 3 },
@@ -1096,6 +1428,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing(2.5),
     paddingVertical: 5,
   },
+  inlineAskButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: colors.accentSoft,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing(2.5),
+    paddingVertical: 5,
+    marginRight: spacing(2),
+  },
   inlineEditText: { color: colors.accent, fontSize: fontSize.xs, fontWeight: '700' },
 
   // Section headers
@@ -1141,6 +1483,7 @@ const styles = StyleSheet.create({
   },
   multilineInput: { minHeight: 78, textAlignVertical: 'top' },
   segmentedRow: { flexDirection: 'row', gap: 8, marginBottom: spacing(4) },
+  segmentedWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: spacing(4) },
   segmentButton: {
     flex: 1,
     backgroundColor: colors.surfaceInput,
@@ -1149,10 +1492,23 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     paddingVertical: spacing(2.5),
     alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
   },
+  segmentButtonCompact: { flex: 0, minWidth: 92, paddingHorizontal: spacing(2) },
   segmentButtonActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
   segmentButtonText: { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '700' },
   segmentButtonTextActive: { color: colors.accent },
+  exchangeOptionContent: { alignItems: 'center', gap: 6 },
+  exchangeMiniMark: {
+    width: 30,
+    height: 30,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   networkSelector: { gap: 8, marginBottom: spacing(4) },
   networkOptionRow: {
     flexDirection: 'row',
@@ -1168,6 +1524,7 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 17,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1179,6 +1536,19 @@ const styles = StyleSheet.create({
   cancelButton: { backgroundColor: colors.surfaceAlt },
   saveButton: { backgroundColor: colors.accent },
   buttonText: { color: '#FFF', fontWeight: '700', fontSize: fontSize.md },
+  deleteAccountButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: spacing(3),
+    paddingVertical: spacing(3),
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.danger,
+    backgroundColor: colors.dangerSoft,
+  },
+  deleteAccountText: { color: colors.danger, fontWeight: '800', fontSize: fontSize.md },
 
   // History styles
   historyRow: {

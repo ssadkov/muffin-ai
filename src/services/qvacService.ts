@@ -1,6 +1,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
-import { loadModel, completion } from '@qvac/sdk';
+import { loadModel, completion, unloadModel } from '@qvac/sdk';
 import { addAuditLog } from './inferenceLogService';
+import { ModelId, DEFAULT_MODEL_ID, getModelSpec } from './modelCatalog';
 
 /**
  * Per-inference telemetry pulled from our own wall-clock timing plus the
@@ -15,34 +16,59 @@ export type InferenceStats = {
   tokensPerSec: number;
   backendDevice?: string;
   cacheTokens?: number;
+  // True for answers resolved entirely from local SQLite without any model
+  // inference. Used to render an honest "on-device • instant" badge.
+  instant?: boolean;
 };
 
 const loadedModels: { [filename: string]: string } = {};
 
-export function isModelLoaded(modelType: 'qwen' | 'medpsy' = 'qwen'): boolean {
-  const modelFilename = 'qwen2.5-3b-q4.gguf';
-  return !!loadedModels[modelFilename];
+export function getModelLocalPath(modelId: ModelId = DEFAULT_MODEL_ID): string {
+  const spec = getModelSpec(modelId);
+  return `${FileSystem.documentDirectory}models/${spec.filename}`;
 }
 
-export async function checkModelExists(modelType: 'qwen' | 'medpsy' = 'qwen'): Promise<boolean> {
-  const modelFilename = 'qwen2.5-3b-q4.gguf';
-  const modelDir = `${FileSystem.documentDirectory}models/`;
-  const modelPath = `${modelDir}${modelFilename}`;
-  const EXPECTED_MIN_SIZE = 2100000000;
+export function isModelLoaded(modelId: ModelId = DEFAULT_MODEL_ID): boolean {
+  return !!loadedModels[getModelSpec(modelId).filename];
+}
+
+export async function checkModelExists(modelId: ModelId = DEFAULT_MODEL_ID): Promise<boolean> {
+  const spec = getModelSpec(modelId);
+  const modelPath = getModelLocalPath(modelId);
   try {
     const fileInfo = await FileSystem.getInfoAsync(modelPath);
-    return !!(fileInfo.exists && fileInfo.size >= EXPECTED_MIN_SIZE);
+    return !!(fileInfo.exists && fileInfo.size >= spec.minSizeBytes);
   } catch (e) {
     return false;
   }
 }
 
+/** Free a loaded model's RAM so switching models doesn't keep both resident. */
+export async function unloadLocalModel(modelId: ModelId): Promise<void> {
+  const filename = getModelSpec(modelId).filename;
+  const loaded = loadedModels[filename];
+  if (!loaded) return;
+  try {
+    await unloadModel({ modelId: loaded });
+  } catch (e) {
+    console.warn(`[QVAC SDK] unloadModel failed for ${filename}:`, e);
+  }
+  delete loadedModels[filename];
+}
+
+export async function deleteLocalModelFile(modelId: ModelId): Promise<void> {
+  await unloadLocalModel(modelId);
+  const modelPath = getModelLocalPath(modelId);
+  await FileSystem.deleteAsync(modelPath, { idempotent: true });
+}
+
 export async function downloadModelIfNeeded(
-  modelType: 'qwen' | 'medpsy' = 'qwen',
-  onProgress?: (progress: number) => void
+  modelId: ModelId = DEFAULT_MODEL_ID,
+  onProgress?: (progress: number, writtenBytes: number, totalBytes: number) => void
 ): Promise<string> {
-  const modelFilename = 'qwen2.5-3b-q4.gguf';
-  const modelUrl = 'https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf';
+  const spec = getModelSpec(modelId);
+  const modelFilename = spec.filename;
+  const modelUrl = spec.url;
 
   const modelDir = `${FileSystem.documentDirectory}models/`;
   const modelPath = `${modelDir}${modelFilename}`;
@@ -52,13 +78,13 @@ export async function downloadModelIfNeeded(
     await FileSystem.makeDirectoryAsync(modelDir, { intermediates: true });
   }
 
-  const EXPECTED_MIN_SIZE = 2100000000;
+  const EXPECTED_MIN_SIZE = spec.minSizeBytes;
   const fileInfo = await FileSystem.getInfoAsync(modelPath);
   console.log(`[QVAC SDK] ${modelFilename} file info on disk:`, fileInfo);
   
   if (fileInfo.exists) {
     if (fileInfo.size >= EXPECTED_MIN_SIZE) {
-      if (onProgress) onProgress(100);
+      if (onProgress) onProgress(100, fileInfo.size, fileInfo.size);
       return modelPath;
     } else {
       console.log(`Model file size is only ${fileInfo.size} bytes. Expected >= ${EXPECTED_MIN_SIZE}. Deleting corrupted file to re-download...`);
@@ -71,8 +97,13 @@ export async function downloadModelIfNeeded(
     modelPath,
     {},
     (downloadProgress) => {
-      const progress = (downloadProgress.totalBytesWritten / downloadProgress.totalBytesExpectedToWrite) * 100;
-      if (onProgress) onProgress(progress);
+      const written = downloadProgress.totalBytesWritten;
+      const total = downloadProgress.totalBytesExpectedToWrite;
+      // HuggingFace serves the GGUF via a redirect (xet), so totalBytes can be
+      // unreliable/understated — clamp the % and let the UI fall back to the
+      // downloaded-bytes counter, which is always accurate.
+      const progress = total > 0 ? Math.min(100, (written / total) * 100) : 0;
+      if (onProgress) onProgress(progress, written, total);
     }
   );
 
@@ -80,9 +111,10 @@ export async function downloadModelIfNeeded(
   return modelPath;
 }
 
-export async function initLocalModel(modelPath: string, modelType: 'qwen' | 'medpsy' = 'qwen') {
-  const modelFilename = 'qwen2.5-3b-q4.gguf';
-  
+export async function initLocalModel(modelPath: string, modelId: ModelId = DEFAULT_MODEL_ID) {
+  const spec = getModelSpec(modelId);
+  const modelFilename = spec.filename;
+
   if (!loadedModels[modelFilename]) {
     const startTime = Date.now();
     try {
@@ -96,7 +128,7 @@ export async function initLocalModel(modelPath: string, modelType: 'qwen' | 'med
         // ctx_size raised to 8192: the financial context string grows with the
         // number of accounts/payments/rates, and a larger window reduces the risk
         // of context shifting (RuntimeStats.contextSlides) mid-conversation.
-        modelConfig: { ctx_size: 8192, gpu_layers: 99, device: "gpu" }
+        modelConfig: { ctx_size: spec.ctxSize, gpu_layers: 99, device: "gpu" }
       });
       loadedModels[modelFilename] = modelId;
       const durationMs = Date.now() - startTime;
@@ -127,7 +159,7 @@ export async function initLocalModel(modelPath: string, modelType: 'qwen' | 'med
 export async function askLocalQVAC(
   systemPrompt: string,
   userPrompt: string,
-  modelType: 'qwen' | 'medpsy' = 'qwen',
+  modelType: ModelId = DEFAULT_MODEL_ID,
   onChunk?: (text: string) => void,
   chatHistory?: { role: 'user' | 'assistant'; content: string }[],
   options?: {
@@ -142,7 +174,7 @@ export async function askLocalQVAC(
     kvCache?: boolean | string;
   }
 ): Promise<any> {
-  const modelFilename = 'qwen2.5-3b-q4.gguf';
+  const modelFilename = getModelSpec(modelType).filename;
   const modelId = loadedModels[modelFilename];
 
   if (!modelId) {

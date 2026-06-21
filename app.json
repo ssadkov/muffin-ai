@@ -15,6 +15,9 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.muffin.ai",
+      "entitlements": {
+        "com.apple.developer.kernel.increased-memory-limit": true
+      },
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSMicrophoneUsageDescription": "Allow Muffin AI to access your microphone for voice commands."

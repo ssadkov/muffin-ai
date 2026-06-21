@@ -1,4 +1,5 @@
 import { askLocalQVAC, InferenceStats } from '../services/qvacService';
+import { ModelId, DEFAULT_MODEL_ID } from '../services/modelCatalog';
 import {
   getLatestBalances,
   getActiveGoals,
@@ -10,6 +11,7 @@ import {
   getUpcomingPaymentObligations,
 } from '../tools/databaseTools';
 import { checkMoneyRules } from '../tools/rulesTools';
+import { AiContext, isAccountContext } from './aiContext';
 import {
   commandToToolCall,
   findMatchingAccount,
@@ -29,13 +31,19 @@ export type AgentAction = {
   metadata?: Record<string, unknown>;
 };
 
-function buildContextString(): string {
+function buildContextString(aiContext?: AiContext | null): string {
   const accounts = getLatestBalances();
   const goals = getActiveGoals();
   const rules = checkMoneyRules();
   const rates = getRatesMap();
 
   let context = 'LOCAL FINANCIAL MEMORY\n\n';
+
+  if (isAccountContext(aiContext)) {
+    context += 'ACTIVE UI CONTEXT:\n';
+    context += `- Current account: ${aiContext.accountName} (ID: ${aiContext.accountId}, currency: ${aiContext.currency}, owner: ${aiContext.ownerType || 'personal'}, source: ${aiContext.source || 'manual'})\n`;
+    context += '- If the user says here, there, this account, current account, тут, здесь, or similar, resolve it to this account unless they explicitly name another account.\n\n';
+  }
   
   context += 'Goals:\n';
   goals.forEach(g => context += `- ${g.title}: $${g.target_value} (Base Currency: ${g.currency || 'USD'})\n`);
@@ -96,7 +104,7 @@ function normalizeQuestion(value: string): string {
 }
 
 function formatMoney(value: number, currency?: string | null): string {
-  const amount = Number(value).toLocaleString(undefined, {
+  const amount = Number(value).toLocaleString('en-US', {
     maximumFractionDigits: 2,
   });
   return `${amount} ${currency || 'USD'}`;
@@ -104,6 +112,23 @@ function formatMoney(value: number, currency?: string | null): string {
 
 function totalUsd(accounts: ReturnType<typeof getLatestBalances>): number {
   return accounts.reduce((sum, account) => sum + Number(account.usd_value || 0), 0);
+}
+
+function formatUsd(value: number): string {
+  return Number(value || 0).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function instantStats(): InferenceStats {
+  return {
+    ttftMs: 0,
+    generationTimeMs: 0,
+    tokenCount: 0,
+    tokensPerSec: 0,
+    instant: true,
+  };
 }
 
 function isBalanceReadQuestion(text: string): boolean {
@@ -116,7 +141,11 @@ function isBalanceReadQuestion(text: string): boolean {
     text.includes('how much') ||
     text.includes('what is on') ||
     text.includes('whats on') ||
-    text.includes('what\'s on')
+    text.includes('what\'s on') ||
+    text.includes('\u0441\u043a\u043e\u043b\u044c\u043a\u043e') ||
+    text.includes('\u0431\u0430\u043b\u0430\u043d\u0441') ||
+    text.includes('\u043e\u0441\u0442\u0430\u0442\u043e\u043a') ||
+    text.includes('\u0441\u043a\u043e\u043a\u0430')
   );
 }
 
@@ -126,6 +155,28 @@ function isAccountOnlyReadQuestion(text: string): boolean {
     .replace(/^(на|in|on)\s+/, '')
     .trim();
   return withoutQuestionWords.length > 0 && withoutQuestionWords.length <= 40 && !/\d/.test(withoutQuestionWords);
+}
+
+function isContextReferenceQuestion(text: string): boolean {
+  return (
+    /\bhere\b|\bthere\b|\bthis account\b|\bthat account\b|\bcurrent account\b|\bthis wallet\b|\bthat wallet\b|\bcurrent wallet\b|\bon this\b|\bin this\b|\bon there\b|\bin there\b/.test(text) ||
+    text.includes('\u0442\u0443\u0442') ||
+    text.includes('\u0437\u0434\u0435\u0441\u044c') ||
+    text.includes('\u043d\u0430 \u044d\u0442\u043e\u043c') ||
+    text.includes('\u0432 \u044d\u0442\u043e\u043c') ||
+    text.includes('\u044d\u0442\u043e\u0442 \u0441\u0447\u0435\u0442') ||
+    text.includes('\u044d\u0442\u043e\u043c \u0441\u0447\u0435\u0442') ||
+    text.includes('\u044d\u0442\u043e\u0442 \u043a\u043e\u0448') ||
+    text.includes('\u044d\u0442\u043e\u043c \u043a\u043e\u0448')
+  );
+}
+
+function getContextAccount(
+  accounts: ReturnType<typeof getLatestBalances>,
+  aiContext?: AiContext | null
+) {
+  if (!isAccountContext(aiContext)) return null;
+  return accounts.find((account) => account.id === aiContext.accountId) || null;
 }
 
 function isOverviewQuestion(text: string): boolean {
@@ -216,23 +267,235 @@ function isPaymentQuestion(text: string): boolean {
   );
 }
 
-function getChainScope(text: string): 'aptos' | 'solana' | null {
-  if (/\bapt\b|\baptos\b|аптос/.test(text)) return 'aptos';
-  if (/\bsol\b|\bsolana\b|солана/.test(text)) return 'solana';
+type WalletChain = 'aptos' | 'solana';
+
+const WALLET_CHAIN_SOURCES: Record<WalletChain, string> = {
+  aptos: 'aptos_public_wallet',
+  solana: 'solana_public_wallet',
+};
+
+function chainFromAccountSource(source?: string | null): WalletChain | null {
+  if (source === WALLET_CHAIN_SOURCES.aptos) return 'aptos';
+  if (source === WALLET_CHAIN_SOURCES.solana) return 'solana';
   return null;
 }
 
-function getChainScopedAccounts(
-  text: string,
-  accounts: ReturnType<typeof getLatestBalances>
-): ReturnType<typeof getLatestBalances> {
-  const chain = getChainScope(text);
-  if (!chain) return [];
+// Robust per-account chain detection. The canonical `source` tag is only set on
+// synced wallets — user-created wallets ("Aptos DeFi Show") may carry source
+// 'manual', so we fall back to the account name. This is why a second Aptos
+// wallet was being missed in the count.
+function chainFromAccount(account: { source?: string | null; name?: string | null }): WalletChain | null {
+  const bySource = chainFromAccountSource(account.source);
+  if (bySource) return bySource;
+  const name = (account.name || '').toLowerCase();
+  if (name.includes('aptos') || name.includes('аптос')) return 'aptos';
+  if (name.includes('solana') || name.includes('солана')) return 'solana';
+  return null;
+}
 
-  return accounts.filter((account) => {
-    const haystack = `${account.id} ${account.name} ${account.source || ''} ${account.model_note || ''}`.toLowerCase();
-    return haystack.includes(chain);
+function getMentionedChains(text: string): WalletChain[] {
+  const chains: WalletChain[] = [];
+  // Normalize "Apto's" / "Aptos wallets" so chain detection is reliable.
+  const chainText = text
+    .replace(/\bapto?s(?:'s|'s|s)?\b/gi, 'aptos')
+    .replace(/\bsolana(?:'s|'s|s)?\b/gi, 'solana');
+
+  if (/\baptos\b|аптос/.test(chainText)) chains.push('aptos');
+  // Match Solana explicitly; avoid bare "sol" (e.g. false positives in edge cases).
+  if (/\bsolana\b|солана/.test(chainText)) chains.push('solana');
+  return chains;
+}
+
+function isWalletListQuestion(text: string): boolean {
+  return (
+    text.includes('дай') ||
+    text.includes('покаж') ||
+    text.includes('список') ||
+    text.includes('какие') ||
+    text.includes('list') ||
+    text.includes('show') ||
+    text.includes('give me') ||
+    /\bwallets?\b/.test(text) ||
+    text.includes('кошел')
+  );
+}
+
+function isCountQuestion(text: string): boolean {
+  // "how many wallets", "сколько ... кошельков/счетов" — counting items, not balance.
+  return (
+    /\bhow many\b/.test(text) ||
+    /\bnumber of\b/.test(text) ||
+    (text.includes('сколько') &&
+      (text.includes('кошельк') || text.includes('счетов') || /\bwallets?\b/.test(text)))
+  );
+}
+
+function ruWalletWord(n: number): string {
+  const mod100 = n % 100;
+  const mod10 = n % 10;
+  if (mod100 >= 11 && mod100 <= 14) return 'кошельков';
+  if (mod10 === 1) return 'кошелёк';
+  if (mod10 >= 2 && mod10 <= 4) return 'кошелька';
+  return 'кошельков';
+}
+
+function buildWalletCountAnswer(
+  accounts: ReturnType<typeof getLatestBalances>,
+  isRussian: boolean,
+  mentionedChains: WalletChain[]
+): string {
+  const count = accounts.length;
+  const chainPrefix = mentionedChains.length === 1 ? `${chainLabel(mentionedChains[0])} ` : '';
+
+  if (count === 0) {
+    return isRussian
+      ? `${chainPrefix ? chainPrefix : 'Публичных '}кошельков пока нет.`
+      : `You have no ${chainPrefix}wallets yet.`;
+  }
+
+  const lines = accounts.map(formatWalletAccountLine);
+  const total = formatUsd(totalUsd(accounts));
+
+  if (isRussian) {
+    return `У тебя ${count} ${chainPrefix}${ruWalletWord(count)}:\n${lines.join('\n')}\n\nИтого: $${total}.`;
+  }
+  const noun = count === 1 ? 'wallet' : 'wallets';
+  return `You have ${count} ${chainPrefix}${noun}:\n${lines.join('\n')}\n\nTotal: $${total}.`;
+}
+
+function isCryptoWalletScopeQuestion(text: string): boolean {
+  if (getMentionedChains(text).length > 0) return false;
+  const hasCryptoScope =
+    text.includes('крипто') ||
+    text.includes('crypto') ||
+    text.includes('on-chain') ||
+    text.includes('onchain') ||
+    text.includes('блокчейн') ||
+    text.includes('blockchain');
+  if (!hasCryptoScope) return false;
+  return isBalanceReadQuestion(text) || isWalletListQuestion(text) || isAccountOnlyReadQuestion(text);
+}
+
+function isAllPublicWalletsQuestion(text: string): boolean {
+  if (isCryptoWalletScopeQuestion(text)) return true;
+
+  const mentionedChains = getMentionedChains(text);
+  if (mentionedChains.length > 0) return false;
+  const hasWalletWord = text.includes('кошел') || /\bwallets?\b/.test(text);
+  if (
+    hasWalletWord &&
+    mentionedChains.length === 0 &&
+    (isBalanceReadQuestion(text) || isWalletListQuestion(text))
+  ) {
+    return true;
+  }
+
+  return (
+    ((text.includes('все') || text.includes('all')) && hasWalletWord) ||
+    text.includes('crypto wallet') ||
+    text.includes('крипто кош')
+  );
+}
+
+function isWalletScopeReadQuestion(
+  text: string,
+  mentionedChains: WalletChain[],
+  allWallets: boolean
+): boolean {
+  if (allWallets) {
+    return isBalanceReadQuestion(text) || isWalletListQuestion(text);
+  }
+  if (mentionedChains.length === 0) return false;
+  return (
+    isBalanceReadQuestion(text) ||
+    isAccountOnlyReadQuestion(text) ||
+    isWalletListQuestion(text)
+  );
+}
+
+function isPublicWalletAccount(account: ReturnType<typeof getLatestBalances>[number]): boolean {
+  if (chainFromAccount(account) !== null) return true;
+  return account.type === 'crypto_wallet';
+}
+
+function getPublicWalletAccounts(
+  accounts: ReturnType<typeof getLatestBalances>,
+  chains?: WalletChain[] | null
+): ReturnType<typeof getLatestBalances> {
+  const wallets = accounts.filter(isPublicWalletAccount);
+  if (!chains || chains.length === 0) return wallets;
+  const allowed = new Set(chains);
+  return wallets.filter((account) => {
+    const chain = chainFromAccount(account);
+    return chain !== null && allowed.has(chain);
   });
+}
+
+function chainLabel(chain: WalletChain): string {
+  return chain === 'aptos' ? 'Aptos' : 'Solana';
+}
+
+function formatWalletAccountLine(account: ReturnType<typeof getLatestBalances>[number]): string {
+  const nativeBalance = formatMoney(account.amount || 0, account.currency || 'USD');
+  const usdValue = formatUsd(account.usd_value || 0);
+  const needsUsdEquivalent = (account.currency || 'USD').toUpperCase() !== 'USD';
+  return needsUsdEquivalent
+    ? `- ${account.name}: ${nativeBalance} (≈ $${usdValue})`
+    : `- ${account.name}: $${usdValue}`;
+}
+
+function buildWalletScopeAnswer(
+  accounts: ReturnType<typeof getLatestBalances>,
+  isRussian: boolean,
+  mentionedChains: WalletChain[]
+): string {
+  if (accounts.length === 0) {
+    if (mentionedChains.length === 1) {
+      return isRussian
+        ? `${chainLabel(mentionedChains[0])}-кошельков пока нет.`
+        : `No ${chainLabel(mentionedChains[0])} wallets yet.`;
+    }
+    return isRussian ? 'Публичных кошельков пока нет.' : 'No public wallets yet.';
+  }
+
+  if (accounts.length === 1) {
+    return buildAccountBalanceAnswer(accounts[0], isRussian);
+  }
+
+  const chainsPresent = [...new Set(
+    accounts
+      .map((account) => chainFromAccount(account))
+      .filter((chain): chain is WalletChain => chain !== null)
+  )];
+
+  const groupByChain = chainsPresent.length > 1 || mentionedChains.length > 1;
+
+  if (!groupByChain) {
+    const lines = accounts.map(formatWalletAccountLine);
+    const total = formatUsd(totalUsd(accounts));
+    const label = chainLabel(chainsPresent[0] || mentionedChains[0] || 'aptos');
+    return isRussian
+      ? `${label}:\n${lines.join('\n')}\n\nИтого: $${total}.`
+      : `${label}:\n${lines.join('\n')}\n\nTotal: $${total}.`;
+  }
+
+  const sections: string[] = [];
+  for (const chain of chainsPresent) {
+    const chainAccounts = accounts.filter((account) => chainFromAccount(account) === chain);
+    if (chainAccounts.length === 0) continue;
+    const lines = chainAccounts.map(formatWalletAccountLine);
+    const subtotal = formatUsd(totalUsd(chainAccounts));
+    sections.push(
+      isRussian
+        ? `${chainLabel(chain)}:\n${lines.join('\n')}\nИтого ${chainLabel(chain)}: $${subtotal}.`
+        : `${chainLabel(chain)}:\n${lines.join('\n')}\n${chainLabel(chain)} subtotal: $${subtotal}.`
+    );
+  }
+
+  const grandTotal = formatUsd(totalUsd(accounts));
+  return isRussian
+    ? `${sections.join('\n\n')}\n\nВсего по кошелькам: $${grandTotal}.`
+    : `${sections.join('\n\n')}\n\nTotal wallets: $${grandTotal}.`;
 }
 
 function getLargestAccount(accounts: ReturnType<typeof getLatestBalances>): any | null {
@@ -249,7 +512,7 @@ function buildLargestBalanceAnswer(accounts: ReturnType<typeof getLatestBalances
   }
 
   const nativeBalance = formatMoney(account.amount || 0, account.currency || 'USD');
-  const usdValue = Number(account.usd_value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  const usdValue = formatUsd(account.usd_value || 0);
   const needsUsdEquivalent = (account.currency || 'USD').toUpperCase() !== 'USD';
 
   if (isRussian) {
@@ -268,11 +531,11 @@ function buildOverviewAnswer(accounts: ReturnType<typeof getLatestBalances>, isR
     const nativeBalance = formatMoney(account.amount || 0, account.currency || 'USD');
     const usdSuffix = (account.currency || 'USD').toUpperCase() === 'USD'
       ? ''
-      : ` (≈ $${Number(account.usd_value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })})`;
+      : ` (≈ $${formatUsd(account.usd_value || 0)})`;
     return `- ${account.name}: ${nativeBalance}${usdSuffix}`;
   });
 
-  const total = totalUsd(accounts).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  const total = formatUsd(totalUsd(accounts));
   return isRussian
     ? `Сейчас по счетам:\n${lines.join('\n')}\n\nИтого в USD-эквиваленте: $${total}.`
     : `Current balances:\n${lines.join('\n')}\n\nTotal USD equivalent: $${total}.`;
@@ -280,7 +543,7 @@ function buildOverviewAnswer(accounts: ReturnType<typeof getLatestBalances>, isR
 
 function buildAccountBalanceAnswer(account: any, isRussian: boolean): string {
   const nativeBalance = formatMoney(account.amount || 0, account.currency || 'USD');
-  const usdValue = Number(account.usd_value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  const usdValue = formatUsd(account.usd_value || 0);
   const needsUsdEquivalent = (account.currency || 'USD').toUpperCase() !== 'USD';
 
   if (isRussian) {
@@ -303,30 +566,30 @@ function buildGoalRemainingAnswer(accounts: ReturnType<typeof getLatestBalances>
   const total = totalUsd(accounts);
   const target = Number(goal.target_value || 0);
   const remaining = Math.max(0, target - total);
-  const totalText = total.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  const remainingText = remaining.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  const totalText = formatUsd(total);
+  const remainingText = formatUsd(remaining);
 
   return isRussian
-    ? `До цели осталось примерно $${remainingText}. Сейчас есть $${totalText} из $${target.toLocaleString()}.`
-    : `About $${remainingText} remains. Current total is $${totalText} of $${target.toLocaleString()}.`;
+    ? `До цели осталось примерно $${remainingText}. Сейчас есть $${totalText} из $${formatUsd(target)}.`
+    : `About $${remainingText} remains. Current total is $${totalText} of $${formatUsd(target)}.`;
 }
 
 function buildGroupedBalanceAnswer(isRussian: boolean): string {
   const groups = getBalanceGroups();
   if (isRussian) {
     return [
-      `Личные счета: $${groups.personalUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
-      `Счета компании: $${groups.companyUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
-      `Твоя доля в company-счетах: $${groups.companyOwnedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
-      `Личные деньги + твоя доля компании: $${groups.totalOwnedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
+      `Личные счета: $${formatUsd(groups.personalUsd)}.`,
+      `Счета компании: $${formatUsd(groups.companyUsd)}.`,
+      `Твоя доля в company-счетах: $${formatUsd(groups.companyOwnedUsd)}.`,
+      `Личные деньги + твоя доля компании: $${formatUsd(groups.totalOwnedUsd)}.`,
     ].join('\n');
   }
 
   return [
-    `Personal accounts: $${groups.personalUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
-    `Company accounts: $${groups.companyUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
-    `Your company share: $${groups.companyOwnedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
-    `Personal + owned company share: $${groups.totalOwnedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
+    `Personal accounts: $${formatUsd(groups.personalUsd)}.`,
+    `Company accounts: $${formatUsd(groups.companyUsd)}.`,
+    `Your company share: $${formatUsd(groups.companyOwnedUsd)}.`,
+    `Personal + owned company share: $${formatUsd(groups.totalOwnedUsd)}.`,
   ].join('\n');
 }
 
@@ -358,8 +621,8 @@ function buildPaymentCoverageAnswer(question: string, isRussian: boolean): strin
 
   if (summary.isCovered) {
     return isRussian
-      ? `На ближайшие ${summary.daysAhead} дней по ${scopeLabel} платежи покрыты.\n${paymentLines.join('\n')}\n\nИтого платежей: ~$${summary.totalDueUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`
-      : `Upcoming payments for ${scopeLabel} are covered for the next ${summary.daysAhead} days.\n${paymentLines.join('\n')}\n\nTotal due: ~$${summary.totalDueUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`;
+      ? `На ближайшие ${summary.daysAhead} дней по ${scopeLabel} платежи покрыты.\n${paymentLines.join('\n')}\n\nИтого платежей: ~$${formatUsd(summary.totalDueUsd)}.`
+      : `Upcoming payments for ${scopeLabel} are covered for the next ${summary.daysAhead} days.\n${paymentLines.join('\n')}\n\nTotal due: ~$${formatUsd(summary.totalDueUsd)}.`;
   }
 
   const deficitLines = summary.deficits.map((deficit: any) => {
@@ -475,8 +738,61 @@ function answerExchangeRateQuestion(text: string): string | null {
   return null;
 }
 
+function answerScopedAccountQuestion(
+  question: string,
+  accounts: ReturnType<typeof getLatestBalances>,
+  isRussian: boolean,
+  aiContext?: AiContext | null
+): string | null {
+  const account = getContextAccount(accounts, aiContext);
+  if (!account) return null;
+
+  const text = normalizeQuestion(question);
+
+  // Chain-scope ("...aptos...") and count ("how many wallets") questions must be
+  // answered by the wallet-scope handler across ALL matching wallets — not
+  // collapsed to the single account the UI auto-bound from a chain keyword.
+  if (isCountQuestion(text) || getMentionedChains(text).length > 0) return null;
+
+  const explicitMatch = findMatchingAccount(text, accounts);
+  const explicitCurrentAccount =
+    explicitMatch.account &&
+    explicitMatch.confidence >= 0.78 &&
+    explicitMatch.account.id === account.id;
+
+  if (
+    explicitMatch.account &&
+    explicitMatch.confidence >= 0.78 &&
+    explicitMatch.account.id !== account.id
+  ) {
+    return null;
+  }
+
+  const isScopedRead =
+    (isContextReferenceQuestion(text) || explicitCurrentAccount) &&
+    (
+      isBalanceReadQuestion(text) ||
+      text.includes('\u043b\u0435\u0436') ||
+      text.includes('\u0441\u0447\u0435\u0442') ||
+      text.includes('\u043a\u043e\u0448') ||
+      /\bwhat\b|\bhow much\b|\bbalance\b|\bhave\b/.test(text)
+    );
+
+  if (!isScopedRead || isOverviewQuestion(text)) return null;
+  return buildAccountBalanceAnswer(account, isRussian);
+}
+
 function answerSimpleReadQuestion(question: string, accounts: ReturnType<typeof getLatestBalances>, isRussian: boolean): string | null {
   const text = normalizeQuestion(question);
+
+  const accountMatch = findMatchingAccount(text, accounts);
+  if (
+    accountMatch.account &&
+    accountMatch.confidence >= 0.78 &&
+    (isBalanceReadQuestion(text) || isAccountOnlyReadQuestion(text))
+  ) {
+    return buildAccountBalanceAnswer(accountMatch.account, isRussian);
+  }
 
   if (isPaymentQuestion(text)) {
     return buildPaymentCoverageAnswer(question, isRussian);
@@ -484,17 +800,6 @@ function answerSimpleReadQuestion(question: string, accounts: ReturnType<typeof 
 
   const rateAnswer = answerExchangeRateQuestion(text);
   if (rateAnswer) return rateAnswer;
-
-  const chainScopedAccounts = getChainScopedAccounts(text, accounts);
-  if (
-    chainScopedAccounts.length > 1 &&
-    (isBalanceReadQuestion(text) || isAccountOnlyReadQuestion(text) || isOverviewQuestion(text))
-  ) {
-    // Multiple wallets share the same chain keyword (e.g. two Aptos wallets).
-    // Let QVAC answer from the full local context so it can summarize all of
-    // them and surface runtime stats/badges in the chat UI.
-    return null;
-  }
 
   if (
     (isCompanyScopeQuestion(text) || isPersonalScopeQuestion(text)) &&
@@ -515,15 +820,6 @@ function answerSimpleReadQuestion(question: string, accounts: ReturnType<typeof 
     return buildOverviewAnswer(accounts, isRussian);
   }
 
-  const accountMatch = findMatchingAccount(text, accounts);
-  if (
-    accountMatch.account &&
-    accountMatch.confidence >= 0.78 &&
-    (isBalanceReadQuestion(text) || isAccountOnlyReadQuestion(text))
-  ) {
-    return buildAccountBalanceAnswer(accountMatch.account, isRussian);
-  }
-
   return null;
 }
 
@@ -533,7 +829,7 @@ const COMMAND_JSON_SCHEMA = {
   properties: {
     action: {
       type: 'string',
-      enum: ['none', 'btc_price', 'create_account', 'update_balance', 'update_goal'],
+      enum: ['none', 'clarify', 'btc_price', 'update_balance', 'update_goal'],
     },
     accountName: { type: 'string' },
     accountId: { type: 'string' },
@@ -545,9 +841,17 @@ const COMMAND_JSON_SCHEMA = {
     },
     targetValue: { type: 'number' },
     title: { type: 'string' },
+    newName: { type: 'string' },
+    confidence: { type: 'number' },
+    clarifyingQuestion: { type: 'string' },
   },
   required: ['action'],
 };
+
+type StructuredWriteResult =
+  | { kind: 'command'; command: ParsedCommand }
+  | { kind: 'clarify'; message: string }
+  | { kind: 'none' };
 
 function getAccountListString(accounts: ReturnType<typeof getLatestBalances>): string {
   return accounts
@@ -565,81 +869,205 @@ function parseJsonObject(text: string): any | null {
   }
 }
 
-function structuredResultToCommand(data: any, accounts: ReturnType<typeof getLatestBalances>): ParsedCommand | null {
-  if (!data || data.action === 'none') return null;
+function normalizeCommandQuestion(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function hasAnyCommandPattern(text: string, patterns: RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function hasSetBalanceCue(question: string): boolean {
+  const text = normalizeCommandQuestion(question);
+  return hasAnyCommandPattern(text, [
+    /\bset\b.*\bbalance\b/,
+    /\bbalance\b.*\b(to|is|now)\b/,
+    /\bmake\b\s+\w*\s*\b(balance|it)\b/,
+    /\bnow\b.*\b(has|is)\b/,
+    /\bcurrent\b.*\bbalance\b/,
+    /баланс/,
+    /теперь/,
+    /сейчас/,
+    /стало/,
+    /установ/,
+    /постав/,
+  ]);
+}
+
+function hasSubtractCue(question: string): boolean {
+  const text = normalizeCommandQuestion(question);
+  return hasAnyCommandPattern(text, [
+    /\bsubtract\b/,
+    /\bspen[dt]\b/,
+    /\bminus\b/,
+    /\bpaid\b/,
+    /\bpay\b\s+(?!pal\b)/,
+    /\bwithdraw\b/,
+    /\bwithdrew\b/,
+    /\bcharged\b/,
+    /спиш/,
+    /спис/,
+    /минус/,
+    /потрат/,
+    /оплат/,
+    /снял/,
+    /снят/,
+    /вывел/,
+    /купил/,
+  ]);
+}
+
+function hasAddCue(question: string): boolean {
+  const text = normalizeCommandQuestion(question);
+  return hasAnyCommandPattern(text, [
+    /\badd\b/,
+    /\bplus\b/,
+    /\bdeposit\b/,
+    /\breceived\b/,
+    /\btop\s+up\b/,
+    /\btopped\s+up\b/,
+    /добав/,
+    /плюс/,
+    /пополн/,
+    /пришл/,
+    /получ/,
+    /зачисл/,
+  ]);
+}
+
+function validateStructuredOperation(
+  question: string,
+  operation: unknown
+): 'add' | 'subtract' | 'set' | 'clarify' | null {
+  if (operation !== 'add' && operation !== 'subtract' && operation !== 'set') return null;
+
+  const hasSet = hasSetBalanceCue(question);
+  const hasSubtract = hasSubtractCue(question);
+  const hasAdd = hasAddCue(question);
+
+  if (hasSet && !hasSubtract && !hasAdd) return 'set';
+  if (operation === 'subtract' && !hasSubtract) return 'clarify';
+  if (operation === 'add' && !hasAdd && hasSet) return 'set';
+
+  return operation;
+}
+
+function structuredResultToWriteResult(
+  data: any,
+  accounts: ReturnType<typeof getLatestBalances>,
+  question: string,
+  aiContext?: AiContext | null
+): StructuredWriteResult {
+  if (!data || data.action === 'none') return { kind: 'none' };
+
+  if (data.action === 'clarify') {
+    return {
+      kind: 'clarify',
+      message: typeof data.clarifyingQuestion === 'string' && data.clarifyingQuestion.trim()
+        ? data.clarifyingQuestion.trim()
+        : 'Please clarify the account, amount, and action.',
+    };
+  }
+
+  const confidence = Number(data.confidence);
+  if (Number.isFinite(confidence) && confidence < 0.68) {
+    return {
+      kind: 'clarify',
+      message: 'Please clarify the account, amount, and action.',
+    };
+  }
 
   if (data.action === 'btc_price') {
-    return { action: 'btc_price', confidence: 0.8 };
+    return { kind: 'command', command: { action: 'btc_price', confidence: 0.8 } };
   }
 
   if (data.action === 'update_goal') {
     const targetValue = Number(data.targetValue ?? data.amount);
-    if (!Number.isFinite(targetValue) || targetValue <= 0) return null;
+    if (!Number.isFinite(targetValue) || targetValue <= 0) return { kind: 'none' };
     return {
-      action: 'update_goal',
-      targetValue,
-      title: typeof data.title === 'string' && data.title.trim()
-        ? data.title.trim()
-        : `Reach $${targetValue.toLocaleString()} in liquid assets`,
-      currency: normalizeCurrency(data.currency || 'USD'),
-      confidence: 0.76,
+      kind: 'command',
+      command: {
+        action: 'update_goal',
+        targetValue,
+        title: typeof data.title === 'string' && data.title.trim()
+          ? data.title.trim()
+          : `Reach $${targetValue.toLocaleString()} in liquid assets`,
+        currency: normalizeCurrency(data.currency || 'USD'),
+        confidence: 0.76,
+      },
     };
   }
 
   if (data.action === 'create_account') {
-    const name = String(data.accountName || data.name || '').trim();
-    const amount = Number(data.amount);
-    if (!name || !Number.isFinite(amount) || amount < 0) return null;
-    return {
-      action: 'create_account',
-      name,
-      amount,
-      currency: normalizeCurrency(data.currency || 'USD'),
-      confidence: 0.8,
-    };
+    return { kind: 'none' };
   }
 
   if (data.action === 'update_balance') {
-    const account = accounts.find((item) => item.id === data.accountId);
+    const account = accounts.find((item) => item.id === data.accountId) || getContextAccount(accounts, aiContext);
     const amount = Number(data.amount);
-    const operation = data.type;
-    if (!account || !Number.isFinite(amount) || amount < 0) return null;
-    if (operation !== 'add' && operation !== 'subtract' && operation !== 'set') return null;
+    if (!account || !Number.isFinite(amount) || amount < 0) {
+      return {
+        kind: 'clarify',
+        message: 'Which account and amount should I update?',
+      };
+    }
+
+    const operation = validateStructuredOperation(question, data.type);
+    if (operation === 'clarify') {
+      return {
+        kind: 'clarify',
+        message: `Do you want to set ${account.name} to ${amount} ${normalizeCurrency(data.currency || account.currency || 'USD')}, add it, or subtract it?`,
+      };
+    }
+    if (!operation) return { kind: 'none' };
+
     return {
-      action: 'update_balance',
-      accountId: account.id,
-      amount,
-      currency: normalizeCurrency(data.currency || account.currency || 'USD'),
-      type: operation,
-      confidence: 0.76,
+      kind: 'command',
+      command: {
+        action: 'update_balance',
+        accountId: account.id,
+        amount,
+        currency: normalizeCurrency(data.currency || account.currency || 'USD'),
+        type: operation,
+        confidence: 0.76,
+      },
     };
   }
 
-  return null;
+  if (data.action === 'rename_account') {
+    return { kind: 'none' };
+  }
+
+  return { kind: 'none' };
 }
 
 async function askStructuredCommandFallback(
   question: string,
   accounts: ReturnType<typeof getLatestBalances>,
-  modelType: 'qwen' | 'medpsy',
-  chatHistory?: { role: 'user' | 'assistant'; content: string }[]
-): Promise<{ command: ParsedCommand | null; stats?: InferenceStats }> {
-  const systemPrompt = `Classify a short personal-finance command.
-Return JSON only. If the user is asking a normal question or details are missing, return {"action":"none"}.
+  modelType: ModelId,
+  chatHistory?: { role: 'user' | 'assistant'; content: string }[],
+  aiContext?: AiContext | null
+): Promise<{ result: StructuredWriteResult; stats?: InferenceStats }> {
+  const systemPrompt = `Extract a short personal-finance WRITE command. Return JSON only.
+If the user is asking a normal read/advice question, return {"action":"none"}.
+If the command looks like a write command but account, amount, or action is unclear, return {"action":"clarify","clarifyingQuestion":"..."}.
 Allowed actions:
 - btc_price
-- create_account with accountName, amount, currency
 - update_balance with accountId, amount, currency, type add|subtract|set
 - update_goal with targetValue, title, currency
 
 Rules:
-- If the user asks to create/add/open a new account, return create_account. Do not update an existing account.
-- set means current balance/state.
-- add means deposit/received/plus.
-- subtract means spend/withdraw/minus.
+- If ACTIVE UI CONTEXT has an account and the user says here/this/current account, use that accountId unless they explicitly name another account.
+- If the user asks to create/add/open a new account, return {"action":"none"}. Account creation is handled only in the Accounts UI.
+- Use only accountId values from the account list. Never invent an accountId.
+- set means current balance/state. "set balance to", "balance is", "now has", "теперь", "стало" => type "set".
+- add means deposit/received/plus/top up. Use it only for incoming money.
+- subtract means spend/withdraw/minus/paid/bought. Use it only for outgoing money.
+- Brand names are not verbs: PayPal is an account name, not "pay".
+- Account rename is disabled in chat. If the user asks to rename an account, return {"action":"none"}.
 - If the user says company/business/corporate, prefer owner=company accounts. If they do not, prefer owner=personal for ambiguous bank names like Kaspi or BCC.
-- update_balance may use only account IDs from the account list and only when the named account clearly matches.
-- If the user names an account that is not in the account list, return create_account if they asked to create it; otherwise return {"action":"none"}. Never substitute a different existing account just because the currency matches.`;
+- If more than one account could match, return clarify.
+- If the user names an account that is not in the account list, return {"action":"none"}. Never substitute a different existing account just because the currency matches.`;
 
   const recentTool = chatHistory
     ?.slice()
@@ -647,8 +1075,14 @@ Rules:
     .map((item) => item.content.match(/"accountId"\s*:\s*"([^"]+)"/)?.[1])
     .find(Boolean);
 
+  const activeContextLine = isAccountContext(aiContext)
+    ? `Active account context: ${aiContext.accountName}, accountId=${aiContext.accountId}, currency=${aiContext.currency}`
+    : 'Active account context: none';
+
   const userPrompt = `Accounts:
 ${getAccountListString(accounts)}
+
+${activeContextLine}
 
 Recent accountId, if the user is correcting a previous amount: ${recentTool || 'none'}
 
@@ -666,60 +1100,326 @@ ${question}`;
       },
     });
     return {
-      command: structuredResultToCommand(parseJsonObject(response.message), accounts),
+      result: structuredResultToWriteResult(parseJsonObject(response.message), accounts, question, aiContext),
       stats: response.stats,
     };
   } catch (error) {
     console.warn('[MuffinAI] Structured command fallback failed:', error);
-    return { command: null };
+    return { result: { kind: 'none' } };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// READ ROUTER: the model classifies a read question into a structured intent
+// (its strength), then deterministic code runs the actual SQLite query and
+// formats the answer (the model never does the arithmetic/counting). Ambiguous
+// questions resolve to `clarify`, which surfaces tappable follow-up chips.
+// ---------------------------------------------------------------------------
+
+export type Clarification = { label: string; prompt: string };
+
+type ReadIntentAction =
+  | 'count_wallets'
+  | 'wallet_balance'
+  | 'list_wallets'
+  | 'account_balance'
+  | 'largest_balance'
+  | 'overview'
+  | 'grouped_balance'
+  | 'goal_remaining'
+  | 'payments'
+  | 'exchange_rate'
+  | 'btc_price'
+  | 'freeform'
+  | 'clarify';
+
+const READ_ACTIONS: ReadIntentAction[] = [
+  'count_wallets', 'wallet_balance', 'list_wallets', 'account_balance',
+  'largest_balance', 'overview', 'grouped_balance', 'goal_remaining',
+  'payments', 'exchange_rate', 'btc_price', 'freeform', 'clarify',
+];
+
+type ReadIntent = {
+  action: ReadIntentAction;
+  chain?: WalletChain | null;
+  scope?: 'personal' | 'company' | null;
+  account?: string | null;
+};
+
+type ReadExecution =
+  | { kind: 'answer'; message: string }
+  | { kind: 'toolcall'; message: string }
+  | { kind: 'clarify'; message: string; clarifications: Clarification[] }
+  | { kind: 'freeform' };
+
+const READ_INTENT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    action: { type: 'string', enum: READ_ACTIONS },
+    chain: { type: 'string', enum: ['aptos', 'solana', ''] },
+    scope: { type: 'string', enum: ['personal', 'company', ''] },
+    account: { type: 'string' },
+  },
+  required: ['action'],
+};
+
+async function classifyReadIntent(
+  question: string,
+  accounts: ReturnType<typeof getLatestBalances>,
+  modelType: ModelId,
+  aiContext?: AiContext | null
+): Promise<{ intent: ReadIntent; stats?: InferenceStats }> {
+  const systemPrompt = `You classify a personal-finance READ question into ONE action. Return JSON only.
+Actions:
+- count_wallets: HOW MANY wallets/accounts (a count). e.g. "how many aptos wallets".
+- wallet_balance: total balance of crypto wallets, optionally for one chain.
+- list_wallets: show the list of wallets.
+- account_balance: balance of ONE specific named account (set "account" to its name).
+- largest_balance: which account holds the most.
+- overview: all balances / total assets / overall financial status.
+- grouped_balance: personal vs company breakdown (set "scope").
+- goal_remaining: how much is left to reach the savings goal.
+- payments: upcoming payments / can I cover bills.
+- exchange_rate: a currency rate or conversion.
+- btc_price: bitcoin price.
+- freeform: advice, explanations, anything needing reasoning.
+- clarify: too vague to choose (e.g. just a chain or account name with no clear verb).
+Set "chain" to aptos or solana only if the user names it, else "".
+Set "scope" to personal or company only if the user implies it, else "".
+Set "account" to the account name only if the user names a specific account, else "".
+Rules: "how many"/"сколько ... кошельков" => count_wallets. A chain name with "how much"/"balance" => wallet_balance with that chain. A bare chain/account name with no verb => clarify.`;
+
+  const activeLine = isAccountContext(aiContext)
+    ? `Active account (resolve "here"/"this"/"тут"/"здесь" to it): ${aiContext.accountName}`
+    : 'Active account: none';
+
+  const userPrompt = `Accounts:
+${accounts.map((a) => `- ${a.name}`).join('\n')}
+
+${activeLine}
+
+Question:
+${question}`;
+
+  try {
+    const response = await askLocalQVAC(systemPrompt, userPrompt, modelType, undefined, [], {
+      generationParams: {
+        temp: 0,
+        top_p: 0.1,
+        predict: 80,
+        reasoning_budget: 0,
+        json_schema: READ_INTENT_SCHEMA,
+      },
+    });
+    const data = parseJsonObject(response.message) || {};
+    const action: ReadIntentAction = READ_ACTIONS.includes(data.action) ? data.action : 'freeform';
+    const chain = data.chain === 'aptos' || data.chain === 'solana' ? data.chain : null;
+    const scope = data.scope === 'personal' || data.scope === 'company' ? data.scope : null;
+    const account = typeof data.account === 'string' && data.account.trim() ? data.account.trim() : null;
+    return { intent: { action, chain, scope, account }, stats: response.stats };
+  } catch (error) {
+    console.warn('[MuffinAI] Read intent classification failed:', error);
+    return { intent: { action: 'freeform' } };
+  }
+}
+
+function buildClarification(
+  chain: WalletChain | null | undefined,
+  isRussian: boolean
+): ReadExecution {
+  if (chain) {
+    const label = chainLabel(chain);
+    const clarifications: Clarification[] = isRussian
+      ? [
+          { label: `Сколько ${label}-кошельков`, prompt: `How many ${label} wallets do I have?` },
+          { label: `Баланс ${label}`, prompt: `What is my total ${label} balance?` },
+          { label: `Список ${label}`, prompt: `List my ${label} wallets` },
+        ]
+      : [
+          { label: `How many ${label} wallets`, prompt: `How many ${label} wallets do I have?` },
+          { label: `${label} balance`, prompt: `What is my total ${label} balance?` },
+          { label: `List ${label} wallets`, prompt: `List my ${label} wallets` },
+        ];
+    return {
+      kind: 'clarify',
+      message: isRussian ? `Что показать по ${label}?` : `What would you like to know about ${label}?`,
+      clarifications,
+    };
+  }
+
+  const clarifications: Clarification[] = isRussian
+    ? [
+        { label: 'Все балансы', prompt: 'What is my current financial status?' },
+        { label: 'Где больше всего', prompt: 'Which account has the most money?' },
+        { label: 'Сколько до цели', prompt: 'How much is left until my goal?' },
+      ]
+    : [
+        { label: 'All balances', prompt: 'What is my current financial status?' },
+        { label: 'Biggest account', prompt: 'Which account has the most money?' },
+        { label: 'Goal progress', prompt: 'How much is left until my goal?' },
+      ];
+  return {
+    kind: 'clarify',
+    message: isRussian ? 'Уточни, что показать:' : 'What would you like to see?',
+    clarifications,
+  };
+}
+
+function executeReadIntent(
+  intent: ReadIntent,
+  question: string,
+  accounts: ReturnType<typeof getLatestBalances>,
+  isRussian: boolean,
+  aiContext?: AiContext | null
+): ReadExecution {
+  const chains: WalletChain[] = intent.chain ? [intent.chain] : [];
+  const walletFilter = chains.length ? chains : null;
+
+  switch (intent.action) {
+    case 'btc_price':
+      return { kind: 'toolcall', message: commandToToolCall({ action: 'btc_price', confidence: 1 }) };
+
+    case 'count_wallets':
+      return {
+        kind: 'answer',
+        message: buildWalletCountAnswer(getPublicWalletAccounts(accounts, walletFilter), isRussian, chains),
+      };
+
+    case 'wallet_balance':
+    case 'list_wallets':
+      return {
+        kind: 'answer',
+        message: buildWalletScopeAnswer(getPublicWalletAccounts(accounts, walletFilter), isRussian, chains),
+      };
+
+    case 'largest_balance':
+      return { kind: 'answer', message: buildLargestBalanceAnswer(accounts, isRussian) };
+
+    case 'overview':
+      return { kind: 'answer', message: buildOverviewAnswer(accounts, isRussian) };
+
+    case 'grouped_balance':
+      return { kind: 'answer', message: buildGroupedBalanceAnswer(isRussian) };
+
+    case 'goal_remaining': {
+      const message = buildGoalRemainingAnswer(accounts, isRussian);
+      return message ? { kind: 'answer', message } : { kind: 'freeform' };
+    }
+
+    case 'payments':
+      return { kind: 'answer', message: buildPaymentCoverageAnswer(question, isRussian) };
+
+    case 'exchange_rate': {
+      const rate = answerExchangeRateQuestion(normalizeQuestion(question));
+      return rate ? { kind: 'answer', message: rate } : { kind: 'freeform' };
+    }
+
+    case 'account_balance': {
+      const match = findMatchingAccount(normalizeQuestion(intent.account || question), accounts);
+      if (match.account && match.confidence >= 0.6) {
+        return { kind: 'answer', message: buildAccountBalanceAnswer(match.account, isRussian) };
+      }
+      const ctxAccount = getContextAccount(accounts, aiContext);
+      if (ctxAccount) {
+        return { kind: 'answer', message: buildAccountBalanceAnswer(ctxAccount, isRussian) };
+      }
+      return buildClarification(intent.chain, isRussian);
+    }
+
+    case 'clarify':
+      return buildClarification(intent.chain, isRussian);
+
+    case 'freeform':
+    default:
+      return { kind: 'freeform' };
   }
 }
 
 export async function askMuffinAi(
-  question: string, 
-  modelType: 'qwen' | 'medpsy' = 'qwen',
+  question: string,
+  modelType: ModelId = DEFAULT_MODEL_ID,
   onChunk?: (text: string) => void,
-  chatHistory?: { role: 'user' | 'assistant'; content: string }[]
-): Promise<{ message: string; stats?: InferenceStats }> {
+  chatHistory?: { role: 'user' | 'assistant'; content: string }[],
+  aiContext?: AiContext | null
+): Promise<{ message: string; stats?: InferenceStats; clarifications?: Clarification[] }> {
   const accounts = getLatestBalances();
   const langSetting = getSetting('language', 'ru');
   const isRussian = langSetting === 'ru';
 
-  const parsedCommand = parseFinanceCommand(question, accounts, chatHistory);
+  // 1. WRITE extraction for command-like text. The local model maps natural
+  // language onto the account list, then deterministic validation gates the
+  // result before any tool card is shown.
+  if (isPotentialCommand(question)) {
+    const { result: structuredResult, stats: structuredStats } = await askStructuredCommandFallback(question, accounts, modelType, chatHistory, aiContext);
+    if (structuredResult.kind === 'command') {
+      console.log(`[MuffinAI] Structured command parsed: ${structuredResult.command.action}`);
+      return { message: commandToToolCall(structuredResult.command), stats: structuredStats };
+    }
+    if (structuredResult.kind === 'clarify') {
+      return { message: structuredResult.message, stats: structuredStats };
+    }
+  }
+
+  // 2. Deterministic fallback if the structured extractor is unavailable.
+  const parsedCommand = parseFinanceCommand(question, accounts, chatHistory, aiContext);
   if (parsedCommand) {
     console.log(`[MuffinAI] Deterministic command parsed: ${parsedCommand.action}`);
     return { message: commandToToolCall(parsedCommand) };
   }
 
-  const simpleReadAnswer = answerSimpleReadQuestion(question, accounts, isRussian);
-  if (simpleReadAnswer) {
-    console.log('[MuffinAI] Deterministic read answer generated');
-    return { message: simpleReadAnswer };
+  // 3a. High-precision deterministic shortcut for the clearest read — counting
+  // wallets. Guarantees the flagship "how many X wallets" works instantly and
+  // never depends on the 3B classifier (which can misroute it to freeform).
+  const normalized = normalizeQuestion(question);
+  if (isPaymentQuestion(normalized)) {
+    console.log('[MuffinAI] payment coverage shortcut.');
+    return {
+      message: buildPaymentCoverageAnswer(question, isRussian),
+      stats: instantStats(),
+    };
   }
 
-  if (isPotentialCommand(question)) {
-    const { command: structuredCommand, stats: structuredStats } = await askStructuredCommandFallback(question, accounts, modelType, chatHistory);
-    if (structuredCommand) {
-      console.log(`[MuffinAI] Structured command fallback parsed: ${structuredCommand.action}`);
-      return { message: commandToToolCall(structuredCommand), stats: structuredStats };
-    }
+  if (
+    isCountQuestion(normalized) &&
+    (getMentionedChains(normalized).length > 0 || /\bwallets?\b/.test(normalized) || normalized.includes('кошел'))
+  ) {
+    const chains = getMentionedChains(normalized);
+    const wallets = getPublicWalletAccounts(accounts, chains.length ? chains : null);
+    console.log(
+      `[MuffinAI] count shortcut. chains=${chains.join(',') || 'all'}, matched=${wallets.length}. ` +
+        `All: ${accounts.map((a) => `${a.name}[src=${a.source}]`).join(' | ')}`
+    );
+    return { message: buildWalletCountAnswer(wallets, isRussian, chains) };
   }
 
-  const context = buildContextString();
+  // 3b. READ router: model classifies the intent, deterministic code runs the
+  // SQLite query. Ambiguous questions return tappable clarification chips.
+  const { intent, stats: intentStats } = await classifyReadIntent(question, accounts, modelType, aiContext);
+  console.log(`[MuffinAI] Read intent: ${intent.action}${intent.chain ? ` (${intent.chain})` : ''}`);
+  const execution = executeReadIntent(intent, question, accounts, isRussian, aiContext);
+  if (execution.kind === 'answer' || execution.kind === 'toolcall') {
+    return { message: execution.message, stats: intentStats };
+  }
+  if (execution.kind === 'clarify') {
+    return { message: execution.message, stats: intentStats, clarifications: execution.clarifications };
+  }
+  // execution.kind === 'freeform' → fall through to the full advice LLM below.
+
+  const context = buildContextString(aiContext);
 
   let instructions = '';
   if (isRussian) {
     instructions = `You are a private local financial assistant on iPhone. You MUST respond in Russian. Keep answers concise.
 Tool calls allowed:
 - [TOOL_CALL: BTC_PRICE] (для запроса цены BTC)
-- [TOOL_CALL: CREATE_ACCOUNT: {"accountName": "ACCOUNT_NAME", "amount": NUMBER, "currency": "CURRENCY"}] (для создания нового счета с начальным балансом)
 - [TOOL_CALL: UPDATE_BALANCE: {"accountId": "ACCOUNT_ID", "amount": NUMBER, "currency": "CURRENCY", "type": "add"|"subtract"|"set"}] (для изменения баланса)
 - [TOOL_CALL: UPDATE_GOAL: {"targetValue": NUMBER, "title": "GOAL_TITLE", "currency": "USD"}] (для целей сбережений)
 
 UPDATE_BALANCE Type Rules:
-0. CREATE_ACCOUNT wins over UPDATE_BALANCE when the user says "создай/добавь/открой новый счет/аккаунт". Example: "Создай аккаунт Halyk Bank, там сейчас лежит 9642 $" -> CREATE_ACCOUNT with accountName "Halyk Bank".
+0. Account creation and account rename are disabled in chat. If the user asks to create/open/add a new account or rename one, reply with text telling them to use the Accounts UI.
 1. UPDATE_BALANCE is ONLY for existing accounts from LOCAL FINANCIAL MEMORY. The account name must clearly match an account ID from the context.
-2. Never update another existing account just because the requested account is missing or the currency matches. If the named account is not in the list, use CREATE_ACCOUNT when creation is requested; otherwise answer with text asking which account to use.
+2. Never update another existing account just because the requested account is missing or the currency matches. If the named account is not in the list, answer with text asking which existing account to use.
 3. "type": "set" is DEFAULT для сообщения баланса/состояния счета (e.g. "на Bybit X", "баланс X", "теперь X", "установи X", "сделай X").
 4. "type": "add" ONLY для пополнения/получения (e.g. "добавь X", "плюс X", "пришло X", "получил X", "пополнил X", "зачислили X").
 5. "type": "subtract" ONLY для списания/траты (e.g. "потратил X", "минус X", "купил за X", "списал X", "оплатил X", "вывел X", "снял X").
@@ -731,7 +1431,6 @@ CRITICAL: Не копируйте числа из примеров. Вычисл
 
 Examples (REFERENCE ONLY - DO NOT COPY NUMBERS):
 - "хочу накопить 120000$" -> [TOOL_CALL: UPDATE_GOAL: {"targetValue": 120000, "title": "Reach $120,000 in liquid assets", "currency": "USD"}]
-- "Создай аккаунт Halyk Bank, там сейчас лежит 9642 $" -> [TOOL_CALL: CREATE_ACCOUNT: {"accountName": "Halyk Bank", "amount": 9642, "currency": "USD"}]
 - "добавь 5000 тенге на Kaspi Gold" -> [TOOL_CALL: UPDATE_BALANCE: {"accountId": "acc_kaspi", "amount": 5000, "currency": "KZT", "type": "add"}]
 - "я потратил 1500 рублей с Bybit Card" -> [TOOL_CALL: UPDATE_BALANCE: {"accountId": "acc_bybit", "amount": 1500, "currency": "RUB", "type": "subtract"}]
 - "у меня на Kaspi Gold теперь 1102420 KZT" -> [TOOL_CALL: UPDATE_BALANCE: {"accountId": "acc_kaspi", "amount": 1102420, "currency": "KZT", "type": "set"}]
@@ -745,14 +1444,13 @@ Examples (REFERENCE ONLY - DO NOT COPY NUMBERS):
     instructions = `You are a private local financial assistant on iPhone. Keep answers concise.
 Tool calls allowed:
 - [TOOL_CALL: BTC_PRICE] (for BTC price queries)
-- [TOOL_CALL: CREATE_ACCOUNT: {"accountName": "ACCOUNT_NAME", "amount": NUMBER, "currency": "CURRENCY"}] (for creating a new account with an opening balance)
 - [TOOL_CALL: UPDATE_BALANCE: {"accountId": "ACCOUNT_ID", "amount": NUMBER, "currency": "CURRENCY", "type": "add"|"subtract"|"set"}] (for balance updates)
 - [TOOL_CALL: UPDATE_GOAL: {"targetValue": NUMBER, "title": "GOAL_TITLE", "currency": "USD"}] (for savings goals)
 
 UPDATE_BALANCE Type Rules:
-0. CREATE_ACCOUNT wins over UPDATE_BALANCE when the user says create/add/open a new account. Example: "Create Halyk Bank account with 9642 USD" -> CREATE_ACCOUNT with accountName "Halyk Bank".
+0. Account creation and account rename are disabled in chat. If the user asks to create/open/add a new account or rename one, reply with text telling them to use the Accounts UI.
 1. UPDATE_BALANCE is ONLY for existing accounts from LOCAL FINANCIAL MEMORY. The account name must clearly match an account ID from the context.
-2. Never update another existing account just because the requested account is missing or the currency matches. If the named account is not in the list, use CREATE_ACCOUNT when creation is requested; otherwise reply with text asking which account to use.
+2. Never update another existing account just because the requested account is missing or the currency matches. If the named account is not in the list, reply with text asking which existing account to use.
 3. "type": "set" is DEFAULT for reporting balance/account state (e.g. "on Bybit X", "my balance is X", "set balance to X", "make it X").
 4. "type": "add" ONLY for depositing/receiving (e.g. "add X", "plus X", "received X", "topped up X").
 5. "type": "subtract" ONLY for spending/withdrawing (e.g. "spent X", "minus X", "paid X", "bought X", "charged X").
@@ -764,7 +1462,6 @@ If the user names a blockchain/network such as Aptos or Solana, summarize all ma
 
 Examples (REFERENCE ONLY - DO NOT COPY NUMBERS):
 - "хочу накопить 120000$" -> [TOOL_CALL: UPDATE_GOAL: {"targetValue": 120000, "title": "Reach $120,000 in liquid assets", "currency": "USD"}]
-- "Create Halyk Bank account with 9642 USD" -> [TOOL_CALL: CREATE_ACCOUNT: {"accountName": "Halyk Bank", "amount": 9642, "currency": "USD"}]
 - "add 5000 KZT to Kaspi Gold" -> [TOOL_CALL: UPDATE_BALANCE: {"accountId": "acc_kaspi", "amount": 5000, "currency": "KZT", "type": "add"}]
 - "I spent 1500 RUB from Bybit Card" -> [TOOL_CALL: UPDATE_BALANCE: {"accountId": "acc_bybit", "amount": 1500, "currency": "RUB", "type": "subtract"}]
 - "my Kaspi Gold balance is now 1102420 KZT" -> [TOOL_CALL: UPDATE_BALANCE: {"accountId": "acc_kaspi", "amount": 1102420, "currency": "KZT", "type": "set"}]
@@ -789,7 +1486,7 @@ Examples (REFERENCE ONLY - DO NOT COPY NUMBERS):
 export async function continueMuffinAi(
   originalQuestion: string, 
   systemMessage: string, 
-  modelType: 'qwen' | 'medpsy' = 'qwen',
+  modelType: ModelId = DEFAULT_MODEL_ID,
   onChunk?: (text: string) => void,
   chatHistory?: { role: 'user' | 'assistant'; content: string }[]
 ): Promise<{ message: string; stats?: InferenceStats }> {
