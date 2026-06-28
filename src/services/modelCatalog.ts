@@ -37,7 +37,7 @@ export const MODEL_CATALOG: Record<ModelId, ModelSpec> = {
     label: 'Qwen3 4B',
     hint: 'Smarter • balanced • ~2.5 GB',
     filename: 'qwen3-4b-q4.gguf',
-    url: 'https://huggingface.co/bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf',
+    url: 'https://huggingface.co/bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf',
     minSizeBytes: 2_400_000_000,
     ctxSize: 8192,
     sizeLabel: '~2.5 GB',

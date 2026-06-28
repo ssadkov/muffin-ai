@@ -107,7 +107,24 @@ export async function downloadModelIfNeeded(
     }
   );
 
-  await downloadResumable.downloadAsync();
+  const result = await downloadResumable.downloadAsync();
+  if (!result || result.status < 200 || result.status >= 300) {
+    await FileSystem.deleteAsync(modelPath, { idempotent: true });
+    throw new Error(
+      `Model download failed for ${modelFilename} (HTTP ${result?.status ?? 'unknown'})`
+    );
+  }
+
+  const downloaded = await FileSystem.getInfoAsync(modelPath);
+  if (!downloaded.exists || !('size' in downloaded) || downloaded.size < EXPECTED_MIN_SIZE) {
+    const got = downloaded.exists && 'size' in downloaded ? downloaded.size : 0;
+    await FileSystem.deleteAsync(modelPath, { idempotent: true });
+    throw new Error(
+      `Downloaded ${modelFilename} is too small (${got} bytes, expected >= ${EXPECTED_MIN_SIZE})`
+    );
+  }
+
+  if (onProgress) onProgress(100, downloaded.size, downloaded.size);
   return modelPath;
 }
 
