@@ -8,9 +8,9 @@
       "critical": true
     },
     {
-      "name": "Hugging Face Qwen3 8B Model Download",
-      "url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
-      "purpose": "Optional one-time download of the larger local GGUF model for QVAC on-device financial inference on high-memory devices",
+      "name": "Hugging Face Qwen3 4B Model Download",
+      "url": "https://huggingface.co/bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+      "purpose": "Optional one-time download of the Qwen3 4B Instruct GGUF for QVAC on-device financial inference (smarter tier, ~2.5 GB)",
       "critical": false
     },
     {

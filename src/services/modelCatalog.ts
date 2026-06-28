@@ -1,7 +1,7 @@
 // Single source of truth for the on-device LLMs the app can run. Adding a model
 // is a one-entry change here — qvacService and the UI both read from this map.
 
-export type ModelId = 'qwen2.5-3b' | 'qwen3-8b';
+export type ModelId = 'qwen2.5-3b' | 'qwen3-4b';
 
 export type ModelSpec = {
   id: ModelId;
@@ -32,15 +32,15 @@ export const MODEL_CATALOG: Record<ModelId, ModelSpec> = {
     ctxSize: 8192,
     sizeLabel: '~2 GB',
   },
-  'qwen3-8b': {
-    id: 'qwen3-8b',
-    label: 'Qwen3 8B',
-    hint: 'Smarter • slower • ~5 GB',
-    filename: 'qwen3-8b-q4.gguf',
-    url: 'https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf',
-    minSizeBytes: 4_900_000_000,
+  'qwen3-4b': {
+    id: 'qwen3-4b',
+    label: 'Qwen3 4B',
+    hint: 'Smarter • balanced • ~2.5 GB',
+    filename: 'qwen3-4b-q4.gguf',
+    url: 'https://huggingface.co/bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf',
+    minSizeBytes: 2_400_000_000,
     ctxSize: 8192,
-    sizeLabel: '~5 GB',
+    sizeLabel: '~2.5 GB',
   },
 };
 
